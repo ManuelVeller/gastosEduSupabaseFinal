@@ -60,6 +60,7 @@ function HistoryTable({ data, loading }) {
                             <thead>
                                 <tr className="bg-slate-50 border-b border-slate-100 text-xs uppercase text-slate-500">
                                     <th className="p-4">Fecha</th>
+                                    <th className="p-4 text-left">Usuario</th>
                                     <th className="p-4 text-right">Diario</th>
                                     <th className="p-4 text-right">Semanal</th>
                                     <th className="p-4 text-right">Mes</th>
@@ -69,6 +70,7 @@ function HistoryTable({ data, loading }) {
                                 {data.map((row, index) => (
                                     <tr key={index} className="hover:bg-slate-50 transition-colors">
                                         <td className="p-4 font-medium text-slate-700">{row.date || row.Fecha}</td>
+                                        <td className="p-4 text-left text-slate-500 font-normal">{row.email || 'Sin email'}</td>
                                         <td className="p-4 text-right font-semibold text-red-600">${(row.daily_total || row.Monto || 0).toFixed(2)}</td>
                                         <td className="p-4 text-right font-semibold text-slate-700">${(row.weekly_total || row["Total Semanal"] || 0).toFixed(2)}</td>
                                         <td className="p-4 text-right font-semibold text-slate-700">${(row.monthly_total || row["Total Mensual"] || 0).toFixed(2)}</td>

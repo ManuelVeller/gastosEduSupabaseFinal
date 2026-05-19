@@ -39,22 +39,47 @@ function App() {
 
   const fetchPerfil = async (userId) => {
     try {
-      const { data, error } = await supabase
+      // 1. Intentamos buscar el perfil. 
+      // IMPORTANTE: Se escribe maybeSingle() con la S mayúscula.
+      let { data, error } = await supabase
         .from('perfiles')
         .select('*')
         .eq('id', userId)
-        .single();
+        .maybeSingle();
       
       if (error) throw error;
+
+      // 2. Si el perfil no existe en la tabla, lo creamos ahora mismo
+      if (!data) {
+        console.log("Perfil no encontrado, creando uno nuevo...");
+        const { data: nuevoPerfil, error: errorInsert } = await supabase
+          .from('perfiles')
+          .insert([
+            { 
+              id: userId, 
+              email: session?.user?.email, 
+              rol: 'empleado' // Rol por defecto
+            }
+          ])
+          .select()
+          .single();
+
+        if (errorInsert) throw errorInsert;
+        data = nuevoPerfil;
+      }
+
+      // 3. Ahora que tenemos data (ya sea porque existía o porque la creamos)
       setPerfil(data);
 
+      // 4. Redireccionamos según el rol que tenga el perfil
       if (data?.rol === 'admin') {
         navigate('/admin');
       } else {
         navigate('/employee');
       }
+
     } catch (err) {
-      console.error('Error fetching perfil:', err);
+      console.error('Error en el flujo de perfil:', err);
     } finally {
       setLoading(false);
     }

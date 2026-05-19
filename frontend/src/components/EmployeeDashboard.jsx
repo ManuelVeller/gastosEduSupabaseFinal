@@ -11,7 +11,7 @@ const EmployeeDashboard = ({ user, onLogout }) => {
     try {
       setLoading(true);
       const { data, error } = await supabase
-        .from('gastos')
+        .from('resumen_gastos')
         .select('*')
         .eq('usuario_id', user.id)
         .order('fecha_gasto', { ascending: false });
