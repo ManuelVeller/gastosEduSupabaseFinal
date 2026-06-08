@@ -1,76 +1,128 @@
 import React, { useState, useEffect } from 'react';
 import ExpenseForm from './ExpenseForm';
 import { supabase } from '../supabaseClient';
-import { LogOut } from 'lucide-react';
+import { UserX } from 'lucide-react';
 
-const EmployeeDashboard = ({ user, onLogout }) => {
-  const [gastos, setGastos] = useState([]);
+const EmployeeDashboard = ({ empleado, onResetName }) => {
+  const [registros, setRegistros] = useState([]);
   const [loading, setLoading] = useState(true);
+  
+  // Iniciamos la pestaña por defecto en 'ingresos' para que combine con el orden visual
+  const [activeTab, setActiveTab] = useState('ingresos');
 
-  const fetchGastos = async () => {
+  // Función de carga que filtra por nombre 'creado_por' y por la tabla activa
+  const fetchRegistros = async () => {
     try {
       setLoading(true);
+      
+      const tablaDestino = activeTab === 'gastos' ? 'resumen_gastos' : 'ingresos';
+      const columnaFecha = activeTab === 'gastos' ? 'fecha_gasto' : 'fecha';
+
       const { data, error } = await supabase
-        .from('resumen_gastos')
+        .from(tablaDestino)
         .select('*')
-        .eq('usuario_id', user.id)
-        .order('fecha_gasto', { ascending: false });
+        .eq('creado_por', empleado)
+        .order(columnaFecha, { ascending: false });
 
       if (error) throw error;
-      setGastos(data || []);
+      setRegistros(data || []);
     } catch (err) {
-      console.error('Error fetching gastos:', err);
+      console.error('Error fetching registros:', err);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchGastos();
-  }, [user.id]);
+    fetchRegistros();
+  }, [empleado, activeTab]);
 
-  const handleExpenseSaved = () => {
-    fetchGastos();
+  const handleRecordSaved = () => {
+    fetchRegistros();
   };
 
   return (
     <div className="min-h-screen bg-slate-50 flex justify-center p-4 sm:p-6 font-sans">
       <div className="w-full max-w-md bg-white rounded-3xl shadow-xl overflow-hidden flex flex-col h-[90vh] max-h-[850px] relative">
-        <header className="bg-expense-600 text-white p-6 pb-8 text-center rounded-b-[2rem] shadow-md z-10 relative flex justify-between items-center">
-          <div className="w-8"></div> {/* Spacer */}
+        
+        {/* HEADER */}
+        <header className="bg-slate-800 text-white p-6 pb-8 text-center rounded-b-[2rem] shadow-md z-10 relative flex justify-between items-center">
+          <div className="w-8"></div> 
           <div>
-            <h1 className="text-2xl font-bold tracking-tight mb-1">Mis Gastos</h1>
-            <p className="text-expense-100/80 text-sm font-medium">Panel de Empleado</p>
+            <h1 className="text-2xl font-bold tracking-tight mb-1">¡Hola, {empleado}!</h1>
+            <p className="text-slate-300 text-sm font-medium">Panel de Carga Directa</p>
           </div>
-          <button onClick={onLogout} className="p-2 hover:bg-white/20 rounded-full transition-colors" title="Cerrar sesión">
-            <LogOut className="w-5 h-5" />
+          <button 
+            onClick={onResetName} 
+            className="p-2 hover:bg-white/20 rounded-full transition-colors" 
+            title="Cambiar de usuario (Borrar nombre)"
+          >
+            <UserX className="w-5 h-5" />
           </button>
         </header>
 
-        <div className="flex-1 overflow-y-auto z-0 -mt-6 pt-10 px-6 pb-6 space-y-8 no-scrollbar relative">
+        {/* NAVEGACIÓN DE PESTAÑAS INVERTIDA (Ingreso Izquierda, Gasto Derecha) */}
+        <div className="flex px-6 mt-4 gap-2 z-10">
+          <button
+            onClick={() => setActiveTab('ingresos')}
+            className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${
+              activeTab === 'ingresos' 
+                ? 'bg-green-600 text-white shadow-sm' 
+                : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+            }`}
+          >
+            📈 Cargar Ingreso
+          </button>
+          <button
+            onClick={() => setActiveTab('gastos')}
+            className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${
+              activeTab === 'gastos' 
+                ? 'bg-red-500 text-white shadow-sm' 
+                : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+            }`}
+          >
+            📉 Cargar Gasto
+          </button>
+        </div>
+
+        {/* CONTENEDOR PRINCIPAL */}
+        <div className="flex-1 overflow-y-auto z-0 pt-4 px-6 pb-6 space-y-6 no-scrollbar relative">
           <section>
-            <ExpenseForm onSaved={handleExpenseSaved} user={user} />
+            <ExpenseForm 
+              onSaved={handleRecordSaved} 
+              empleado={empleado} 
+              tipoRegistro={activeTab} 
+            />
           </section>
 
           <hr className="border-slate-100" />
 
+          {/* HISTORIAL RECIENTE */}
           <section>
-            <h3 className="text-lg font-bold text-slate-800 mb-4 px-1">Historial Reciente</h3>
+            <h3 className="text-lg font-bold text-slate-800 mb-4 px-1">
+              Mis {activeTab === 'gastos' ? 'Gastos' : 'Ingresos'} Recientes
+            </h3>
+            
             {loading ? (
-              <p className="text-center text-slate-400">Cargando gastos...</p>
-            ) : gastos.length === 0 ? (
-              <p className="text-center text-slate-400">Aún no hay gastos registrados.</p>
+              <p className="text-center text-slate-400">Cargando...</p>
+            ) : registros.length === 0 ? (
+              <p className="text-center text-slate-400">Aún no hay registros en esta sección.</p>
             ) : (
               <div className="space-y-3">
-                {gastos.map((g) => (
-                  <div key={g.id} className="bg-white border border-slate-100 p-4 rounded-xl shadow-sm flex justify-between items-center">
+                {registros.map((r) => (
+                  <div key={r.id} className="bg-white border border-slate-100 p-4 rounded-xl shadow-sm flex justify-between items-center">
                     <div>
-                      <p className="font-bold text-slate-700">{g.categoria}</p>
-                      <p className="text-xs text-slate-400">{new Date(g.fecha_gasto).toLocaleDateString()} - {g.metodo_pago}</p>
-                      {g.descripcion && <p className="text-xs text-slate-500 mt-1">{g.descripcion}</p>}
+                      <p className="font-bold text-slate-700">{r.categoria}</p>
+                      <p className="text-xs text-slate-400">
+                        {(activeTab === 'gastos' ? r.fecha_gasto : r.fecha) 
+                          ? (activeTab === 'gastos' ? r.fecha_gasto : r.fecha).split('-').reverse().join('/') 
+                          : 'Sin Fecha'} 
+                        {r.metodo_pago && ` - ${r.metodo_pago}`}
+                      </p>
+                      {r.descripcion && <p className="text-xs text-slate-500 mt-1">{r.descripcion}</p>}
                     </div>
-                    <div className="text-lg font-black text-expense-600">
-                      ${g.monto}
+                    <div className={`text-lg font-black ${activeTab === 'gastos' ? 'text-red-500' : 'text-green-600'}`}>
+                      ${r.monto}
                     </div>
                   </div>
                 ))}

@@ -1,129 +1,144 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
-import { supabase } from './supabaseClient';
-import LoginForm from './components/LoginForm';
 import EmployeeDashboard from './components/EmployeeDashboard';
 import AdminDashboard from './components/AdminDashboard';
 
 function App() {
-  const [session, setSession] = useState(null);
-  const [perfil, setPerfil] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [adminPassword, setAdminPassword] = useState('');
+  const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  
+  // 1. LEER EL NOMBRE GUARDADO: Intenta buscar si ya hay un nombre en la memoria del celular
+  const [empleado, setEmpleado] = useState(() => {
+    return localStorage.getItem('nombre_empleado') || '';
+  }); 
+  const [nuevoNombre, setNuevoNombre] = useState('');
+
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) {
-        fetchPerfil(session.user.id);
-      } else {
-        setLoading(false);
-      }
-    });
+    const timer = setTimeout(() => setLoading(false), 500);
+    return () => clearTimeout(timer);
+  }, []);
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) {
-        fetchPerfil(session.user.id);
-      } else {
-        setPerfil(null);
-        setLoading(false);
-        navigate('/login');
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, [navigate]);
-
-  const fetchPerfil = async (userId) => {
-    try {
-      // 1. Intentamos buscar el perfil. 
-      // IMPORTANTE: Se escribe maybeSingle() con la S mayúscula.
-      let { data, error } = await supabase
-        .from('perfiles')
-        .select('*')
-        .eq('id', userId)
-        .maybeSingle();
-      
-      if (error) throw error;
-
-      // 2. Si el perfil no existe en la tabla, lo creamos ahora mismo
-      if (!data) {
-        console.log("Perfil no encontrado, creando uno nuevo...");
-        const { data: nuevoPerfil, error: errorInsert } = await supabase
-          .from('perfiles')
-          .insert([
-            { 
-              id: userId, 
-              email: session?.user?.email, 
-              rol: 'empleado' // Rol por defecto
-            }
-          ])
-          .select()
-          .single();
-
-        if (errorInsert) throw errorInsert;
-        data = nuevoPerfil;
-      }
-
-      // 3. Ahora que tenemos data (ya sea porque existía o porque la creamos)
-      setPerfil(data);
-
-      // 4. Redireccionamos según el rol que tenga el perfil
-      if (data?.rol === 'admin') {
-        navigate('/admin');
-      } else {
-        navigate('/employee');
-      }
-
-    } catch (err) {
-      console.error('Error en el flujo de perfil:', err);
-    } finally {
-      setLoading(false);
+  // 2. GUARDAR EL NOMBRE EN LA MEMORIA
+  const handleGuardarNombre = (e) => {
+    e.preventDefault();
+    if (nuevoNombre.trim() !== '') {
+      const nombreLimpio = nuevoNombre.trim();
+      localStorage.setItem('nombre_empleado', nombreLimpio); // Se guarda en el celular
+      setEmpleado(nombreLimpio); // Se activa en la app
     }
   };
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
+  const handleAdminLogin = (e) => {
+    e.preventDefault();
+    if (adminPassword === 'jefe2026') { // <-- Tu clave maestra
+      setIsAdmin(true);
+      setShowAdminLogin(false);
+      setError('');
+      setAdminPassword('');
+      navigate('/admin', { replace: true });
+    } else {
+      setError('Contraseña incorrecta');
+    }
+  };
+
+  const handleLogout = () => {
+    setIsAdmin(false);
+    navigate('/employee', { replace: true });
   };
 
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <p className="text-slate-500 font-medium">Cargando aplicación...</p>
+        <p className="text-slate-500 font-medium">Cargando...</p>
+      </div>
+    );
+  }
+
+  // 3. PANTALLA INICIAL SI NO HAY NOMBRE GUARDADO
+  if (!empleado && !showAdminLogin && !isAdmin) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
+        <div className="max-w-md w-full bg-white rounded-xl shadow-lg p-8 border border-slate-100 text-center">
+          <h2 className="text-xl font-bold text-slate-800 mb-2">¡Hola! Bienvenid@</h2>
+          <p className="text-sm text-slate-500 mb-6">Ingresa tu nombre para configurar la app en este dispositivo.</p>
+          
+          <form onSubmit={handleGuardarNombre} className="space-y-4">
+            <input 
+              type="text" 
+              placeholder="Ej: Edu" 
+              value={nuevoNombre} 
+              onChange={(e) => setNuevoNombre(e.target.value)} 
+              className="w-full px-4 py-2 border border-slate-200 rounded-lg text-center font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              required
+              autoFocus
+            />
+            <button type="submit" className="w-full py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors">
+              Comenzar a usar
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (showAdminLogin) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
+        <div className="max-w-md w-full bg-white rounded-xl shadow-lg p-8 border border-slate-100">
+          <h3 className="text-xl font-bold text-slate-800 mb-4 text-center">Acceso Administración</h3>
+          <form onSubmit={handleAdminLogin} className="space-y-4">
+            <input 
+              type="password" 
+              placeholder="Ingresar Clave Maestra" 
+              value={adminPassword} 
+              onChange={(e) => setAdminPassword(e.target.value)} 
+              className="w-full px-4 py-2 border border-slate-200 rounded-lg text-center"
+              autoFocus
+            />
+            {error && <p className="text-red-500 text-sm text-center font-medium">{error}</p>}
+            <div className="flex gap-3 pt-2">
+              <button type="button" onClick={() => { setShowAdminLogin(false); setError(''); }} className="w-1/2 py-2 bg-slate-100 text-slate-600 rounded-lg">Volver</button>
+              <button type="submit" className="w-1/2 py-2 bg-blue-600 text-white rounded-lg">Ingresar</button>
+            </div>
+          </form>
+        </div>
       </div>
     );
   }
 
   return (
-    <Routes>
-      <Route 
-        path="/login" 
-        element={!session ? <LoginForm /> : <Navigate to={perfil?.rol === 'admin' ? '/admin' : '/employee'} />} 
-      />
-      
-      <Route 
-        path="/employee" 
-        element={
-          session && perfil?.rol === 'empleado' 
-            ? <EmployeeDashboard user={session.user} onLogout={handleLogout} /> 
-            : <Navigate to="/login" />
-        } 
-      />
-      
-      <Route 
-        path="/admin" 
-        element={
-          session && perfil?.rol === 'admin' 
-            ? <AdminDashboard user={session.user} onLogout={handleLogout} /> 
-            : <Navigate to="/login" />
-        } 
-      />
+    <div className="min-h-screen flex flex-col justify-between bg-slate-50">
+      <div className="flex-grow">
+        <Routes>
+          <Route 
+            path="/employee" 
+            element={
+              <EmployeeDashboard 
+                empleado={empleado} 
+                onResetName={() => { localStorage.removeItem('nombre_empleado'); setEmpleado(''); }} 
+              />
+            } 
+          />
+          <Route 
+            path="/admin" 
+            element={isAdmin ? <AdminDashboard onLogout={handleLogout} /> : <Navigate to="/employee" replace />} 
+          />
+          <Route path="*" element={<Navigate to="/employee" replace />} />
+        </Routes>
+      </div>
 
-      <Route path="*" element={<Navigate to="/login" />} />
-    </Routes>
+      <footer className="py-6 text-center bg-slate-50 flex justify-center gap-4 items-center">
+        <span className="text-xs text-slate-400">Operando como: <strong>{empleado}</strong></span>
+        <button onClick={() => setShowAdminLogin(true)} className="text-xs text-slate-300 hover:text-slate-500 transition-colors">
+          ⚙️ Panel de Control
+        </button>
+      </footer>
+    </div>
   );
 }
 

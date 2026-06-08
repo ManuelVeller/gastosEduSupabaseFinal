@@ -1,18 +1,30 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
 
-const CATEGORIES = ['Transporte', 'Lavadero', 'Comida', 'Nafta', 'Estacionamiento', 'Otro'];
+// Categorías adaptadas para ambos flujos
+const CATEGORIES_GASTOS = ['Transporte', 'Lavadero', 'Comida', 'Nafta', 'Estacionamiento', 'Otro'];
+const CATEGORIES_INGRESOS = ['Venta', 'Inyección Capital', 'Cobro', 'Otro'];
 
-function ExpenseForm({ onSaved, user }) {
+function ExpenseForm({ onSaved, empleado, tipoRegistro }) {
+    // Calculamos la fecha local real de Argentina (UTC-3) para evitar desfasajes
+    const ahora = new Date();
+    const offset = ahora.getTimezoneOffset() * 60000;
+    const fechaLocal = new Date(ahora.getTime() - offset).toISOString().split('T')[0];
+
     const [formData, setFormData] = useState({
         monto: '',
         categoria: '',
         descripcion: '',
-        metodo_pago: '',
-        fecha_gasto: new Date().toISOString().split('T')[0]
+        metodo_pago: 'MP',
+        fecha: fechaLocal
     });
     const [loading, setLoading] = useState(false);
     const [statusText, setStatusText] = useState('');
+
+    // Reseteamos la categoría al cambiar entre Gasto e Ingreso para evitar inconsistencias
+    useEffect(() => {
+        setFormData(prev => ({ ...prev, categoria: '' }));
+    }, [tipoRegistro]);
 
     const handleChange = (e) => {
         const { name, value } = e.target;
@@ -27,24 +39,30 @@ function ExpenseForm({ onSaved, user }) {
         setStatusText('Guardando...');
 
         try {
-            // Mapeamos los datos asegurando que coincidan con tus columnas de Supabase
-            const gastoToInsert = {
-                usuario_id: user?.id,
+            // Estructura base común para ambas tablas
+            const registroToInsert = {
                 monto: parseFloat(formData.monto), 
                 categoria: formData.categoria,
                 descripcion: formData.descripcion || '', 
-                metodo_pago: formData.metodo_pago,
-                fecha: formData.fecha_gasto
+                creado_por: empleado
             };
 
-            console.log("Enviando este objeto:", gastoToInsert);
+            // Mapeo dinámico de columnas según la tabla de destino
+            if (tipoRegistro === 'gastos') {
+                registroToInsert.fecha_gasto = formData.fecha;
+                registroToInsert.metodo_pago = formData.metodo_pago;
+            } else {
+                registroToInsert.fecha = formData.fecha;
+                registroToInsert.metodo_pago = formData.metodo_pago;
+            }
+
+            console.log(`Enviando a ${tipoRegistro}:`, registroToInsert);
 
             const { error } = await supabase
-                .from('gastos')
-                .insert([gastoToInsert]);
+                .from(tipoRegistro)
+                .insert([registroToInsert]);
 
             if (error) {
-                // ESTO ES CLAVE: Si falla, nos dirá el motivo real en la consola
                 console.error("Error específico de Supabase:", error.message, error.details);
                 throw error;
             }
@@ -62,6 +80,8 @@ function ExpenseForm({ onSaved, user }) {
             setLoading(false);
         }
     };
+
+    const categoriasActuales = tipoRegistro === 'gastos' ? CATEGORIES_GASTOS : CATEGORIES_INGRESOS;
 
     return (
         <form onSubmit={handleSubmit} className="space-y-5">
@@ -92,8 +112,8 @@ function ExpenseForm({ onSaved, user }) {
                         <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 block px-1">Fecha</label>
                         <input
                             type="date"
-                            name="fecha_gasto"
-                            value={formData.fecha_gasto}
+                            name="fecha"
+                            value={formData.fecha}
                             onChange={handleChange}
                             required
                             className="w-full bg-white border-2 border-slate-100 rounded-xl py-3 px-4 text-sm font-semibold text-slate-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all"
@@ -112,7 +132,7 @@ function ExpenseForm({ onSaved, user }) {
                                 className="w-full bg-white border-2 border-slate-100 rounded-xl py-3 px-4 text-sm font-semibold text-slate-700 outline-none appearance-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all cursor-pointer"
                             >
                                 <option value="" disabled>Seleccionar</option>
-                                {CATEGORIES.map(cat => (
+                                {categoriasActuales.map(cat => (
                                     <option key={cat} value={cat}>{cat}</option>
                                 ))}
                             </select>
@@ -147,14 +167,18 @@ function ExpenseForm({ onSaved, user }) {
                     <option value="Tarjeta">Tarjeta</option>
                     <option value="Otro">Otro</option>
                 </select>
-            </div>                       
+            </div>                      
             
             <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-4 bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white rounded-2xl font-bold text-lg shadow-lg shadow-blue-500/30 transition-all disabled:opacity-70 flex items-center justify-center gap-2"
+                className={`w-full py-4 text-white rounded-2xl font-bold text-lg shadow-lg transition-all disabled:opacity-70 flex items-center justify-center gap-2 active:scale-[0.98] ${
+                    tipoRegistro === 'gastos' 
+                        ? 'bg-red-500 hover:bg-red-600 shadow-red-500/20' 
+                        : 'bg-green-600 hover:bg-green-700 shadow-green-600/20'
+                }`}
             >
-                {statusText || 'Guardar Gasto'}
+                {statusText || (tipoRegistro === 'gastos' ? 'Guardar Gasto' : 'Guardar Ingreso')}
             </button>
         </form>
     );
