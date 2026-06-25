@@ -2,23 +2,102 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
 import { LogOut, FileText, CheckCircle, PieChart, ArrowUpRight } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import * as XLSX from 'xlsx';
 
 const AdminDashboard = ({ user, onLogout }) => {
   const [gastos, setGastos] = useState([]);
   const [ingresos, setIngresos] = useState([]);
   const [tareas, setTareas] = useState([]);
+  const [sprintsHistoricos, setSprintsHistoricos] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('resumen'); // resumen, gastos, ingresos, tareas
+  const [activeTab, setActiveTab] = useState('resumen');
+  const [sprintLoading, setSprintLoading] = useState(false);
 
+  // Mapeo centralizado de filtros
+  const [filtros, setFiltros] = useState({
+    periodo: 'activo', // 'activo', 'todos', o el UUID de un sprint cerrado
+    fechaDesde: '',
+    fechaHasta: ''
+  });
+
+  // 1. Cargar la lista de sprints cerrados para el selector
+  const fetchSprints = async () => {
+    try {
+      const { data } = await supabase
+        .from('sprints')
+        .select('id, nombre, fecha_inicio')
+        .eq('estado', 'cerrado')
+        .order('fecha_inicio', { ascending: false });
+      if (data) setSprintsHistoricos(data);
+    } catch (err) {
+      console.error('Error cargando historico de sprints:', err);
+    }
+  };
+
+  // 2. Consulta dinámica y estricta según filtros aplicados
   const fetchAdminData = async () => {
     try {
       setLoading(true);
-      
-      // Consultas globales a Supabase independientes de las relaciones de Auth viejas
+
+      // Usamos el signo de exclamación para forzar a Supabase a usar la relación limpia que creamos
+      let queryGastos = supabase
+        .from('gastos')
+        .select('*, sprints!fk_gastos_sprints_unica(nombre)')
+        .order('fecha_gasto', { ascending: false });
+
+      let queryIngresos = supabase
+        .from('ingresos')
+        .select('*, sprints!fk_ingresos_sprints_unica(nombre)')
+        .order('fecha', { ascending: false });
+
+      let queryTareas = supabase.from('tareas').select('*'); // Las tareas quedan globales
+
+      // --- FILTRO ESTRICTO DE SPRINT ACTIVO ---
+      if (filtros.periodo === 'activo') {
+        const { data: sprintActivo, error: sprintError } = await supabase
+          .from('sprints')
+          .select('id')
+          .eq('estado', 'activo')
+          .maybeSingle();
+
+        if (sprintError) throw sprintError;
+
+        if (sprintActivo && sprintActivo.id) {
+          queryGastos = queryGastos.eq('sprint_id', sprintActivo.id);
+          queryIngresos = queryIngresos.eq('sprint_id', sprintActivo.id);
+        } else {
+          // Si elegiste "Sprint Activo" pero no hay ninguno abierto, 
+          // mostramos finanzas en 0 pero dejamos que carguen las tareas globales con normalidad
+          setGastos([]);
+          setIngresos([]);
+          
+          const tareasRes = await queryTareas;
+          setTareas(tareasRes.data || []);
+          setLoading(false);
+          return;
+        }
+      } 
+      // --- FILTRO PARA SPRINTS HISTÓRICOS CERRADOS ---
+      else if (filtros.periodo !== 'todos' && filtros.periodo !== 'personalizado') {
+        queryGastos = queryGastos.eq('sprint_id', filtros.periodo);
+        queryIngresos = queryIngresos.eq('sprint_id', filtros.periodo);
+      }
+
+      // --- FILTRO POR RANGOS DE FECHA MANUAL ---
+      if (filtros.fechaDesde) {
+        queryGastos = queryGastos.gte('fecha_gasto', filtros.fechaDesde);
+        queryIngresos = queryIngresos.gte('fecha', filtros.fechaDesde);
+      }
+      if (filtros.fechaHasta) {
+        queryGastos = queryGastos.lte('fecha_gasto', filtros.fechaHasta);
+        queryIngresos = queryIngresos.lte('fecha', filtros.fechaHasta);
+      }
+
+      // Ejecución paralela de las consultas ya filtradas
       const [gastosRes, ingresosRes, tareasRes] = await Promise.all([
-        supabase.from('gastos').select('*').order('fecha_gasto', { ascending: false }),
-        supabase.from('ingresos').select('*').order('fecha', { ascending: false }),
-        supabase.from('tareas').select('*') // <-- Quitamos el .order() conflictivo
+        queryGastos,
+        queryIngresos,
+        queryTareas
       ]);
 
       if (gastosRes.error) throw gastosRes.error;
@@ -28,16 +107,101 @@ const AdminDashboard = ({ user, onLogout }) => {
       setGastos(gastosRes.data || []);
       setIngresos(ingresosRes.data || []);
       setTareas(tareasRes.data || []);
+
     } catch (err) {
       console.error('Error fetching admin data:', err);
+      alert('Error al filtrar los datos: ' + err.message);
     } finally {
       setLoading(false);
     }
   };
 
+  // Disparar recarga global cuando cambie cualquier filtro
   useEffect(() => {
     fetchAdminData();
+  }, [filtros]);
+
+  // Cargar lista de opciones del selector al montar el componente
+  useEffect(() => {
+    fetchSprints();
   }, []);
+
+  // --- LÓGICA DE EXPORTACIÓN A EXCEL MÚLTIPLE HOJA ---
+  const exportarAExcel = () => {
+    if (gastos.length === 0 && ingresos.length === 0) {
+      alert("No hay datos en este período para exportar.");
+      return;
+    }
+
+    try {
+      const libro = XLSX.utils.book_new();
+
+      if (gastos.length > 0) {
+        const datosGastos = gastos.map(g => ({
+          Fecha: g.fecha_gasto ? new Date(g.fecha_gasto).toLocaleDateString('es-AR') : 'Sin fecha',
+          Empleado: g.creado_por || 'Desconocido',
+          Sprint: g.sprints?.nombre || 'Global / Sin asignar',
+          Categoría: g.categoria,
+          Descripción: g.descripcion || '-',
+          'Método Pago': g.metodo_pago || '-',
+          Monto: parseFloat(g.monto || 0)
+        }));
+        const hojaGastos = XLSX.utils.json_to_sheet(datosGastos);
+        XLSX.utils.book_append_sheet(libro, hojaGastos, "Gastos");
+      }
+
+      if (ingresos.length > 0) {
+        const datosIngresos = ingresos.map(i => ({
+          Fecha: i.fecha ? new Date(i.fecha).toLocaleDateString('es-AR') : 'Sin fecha',
+          'Cargado Por': i.creado_por || 'Sistema',
+          Sprint: i.sprints?.nombre || 'Global / Sin asignar',
+          Categoría: i.categoria,
+          Descripción: i.descripcion || '-',
+          Monto: parseFloat(i.monto || 0)
+        }));
+        const hojaIngresos = XLSX.utils.json_to_sheet(datosIngresos);
+        XLSX.utils.book_append_sheet(libro, hojaIngresos, "Ingresos");
+      }
+
+      XLSX.writeFile(libro, `Rendicion_Caja_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch (error) {
+      console.error("Error al exportar Excel:", error);
+      alert("Error al generar el archivo.");
+    }
+  };
+
+  // --- LÓGICA PARA CONTROLAR EL SPRINT FINANCIERO ---
+  const iniciarNuevoSprint = async () => {
+    const nombreSprint = prompt("Ingresá el nombre/período del nuevo Sprint (ej: Quincena Junio):");
+    if (!nombreSprint) return;
+
+    setSprintLoading(true);
+    try {
+      await supabase
+        .from('sprints')
+        .update({ estado: 'cerrado', fecha_fin: new Date().toISOString() })
+        .eq('estado', 'activo');
+
+      const { error } = await supabase
+        .from('sprints')
+        .insert([{ 
+          nombre: nombreSprint, 
+          usuario: user?.email || 'mmanu', 
+          estado: 'activo' 
+        }]);
+
+      if (error) throw error;
+
+      alert(`🚀 Sprint "${nombreSprint}" iniciado exitosamente.`);
+      fetchSprints(); 
+      setFiltros({ ...filtros, periodo: 'activo' }); 
+    } catch (error) {
+      console.error("Error configurando Sprint:", error);
+      alert("Error al iniciar el Sprint: " + error.message);
+    } finally {
+      setSprintLoading(false);
+    }
+  };
 
   // --- PROCESAMIENTO DE DATOS PARA EL GRÁFICO COMPARATIVO ---
   const balancePorCategoria = {};
@@ -94,14 +258,56 @@ const AdminDashboard = ({ user, onLogout }) => {
 
         {/* CONTENT AREA */}
         <div className="flex-1 bg-white rounded-3xl shadow-sm border border-slate-100 p-6 min-h-[500px]">
+          
+          {/* SECCIÓN GLOBAL DE FILTROS */}
+          {activeTab === 'resumen' && (
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Filtrar Período</label>
+                <select 
+                  value={filtros.periodo} 
+                  onChange={(e) => setFiltros({ ...filtros, periodo: e.target.value })}
+                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm font-semibold text-slate-700 outline-none cursor-pointer"
+                >
+                  <option value="activo">⚡ Sprint Actual Activo</option>
+                  <option value="todos">🌍 Ver Histórico Completo</option>
+                  {sprintsHistoricos.map(s => (
+                    <option key={s.id} value={s.id}>🛑 {s.nombre} ({new Date(s.fecha_inicio).toLocaleDateString('es-AR')})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Desde Fecha</label>
+                <input 
+                  type="date" 
+                  value={filtros.fechaDesde} 
+                  onChange={(e) => setFiltros({ ...filtros, fechaDesde: e.target.value, periodo: e.target.value ? 'personalizado' : filtros.periodo })}
+                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm font-semibold text-slate-700 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Hasta Fecha</label>
+                <input 
+                  type="date" 
+                  value={filtros.fechaHasta} 
+                  onChange={(e) => setFiltros({ ...filtros, fechaHasta: e.target.value, periodo: e.target.value ? 'personalizado' : filtros.periodo })}
+                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm font-semibold text-slate-700 outline-none"
+                />
+              </div>
+            </div>
+          )}
+
           {loading ? (
-            <div className="h-full flex items-center justify-center text-slate-400">Cargando datos globales...</div>
+            <div className="h-full flex items-center justify-center text-slate-400">Cargando datos filtrados...</div>
           ) : (
             <>
               {/* TAB 1: RESUMEN GENERAL */}
               {activeTab === 'resumen' && (
                 <div className="space-y-6">
                   <h2 className="text-2xl font-bold text-slate-800">Resumen General</h2>
+                  
                   <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                     <div className="bg-green-50 p-4 rounded-xl border border-green-100">
                       <p className="text-sm text-green-700 font-medium">Ingresos Totales</p>
@@ -123,8 +329,24 @@ const AdminDashboard = ({ user, onLogout }) => {
                     </div>
                   </div>
 
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                    <button 
+                      onClick={iniciarNuevoSprint}
+                      disabled={sprintLoading}
+                      className="py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-sm transition-colors flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+                    >
+                      🏁 Configurar / Arrancar Sprint
+                    </button>
+                    <button 
+                      onClick={exportarAExcel}
+                      className="py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl shadow-sm transition-colors flex items-center justify-center gap-2 text-sm"
+                    >
+                      📊 Descargar Cierre en Excel
+                    </button>
+                  </div>
+
                   {/* Gráfico dual Recharts */}
-                  <div className="h-[320px] mt-8 w-full">
+                  <div className="h-[320px] mt-4 w-full">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={chartData}>
                         <XAxis dataKey="name" />
@@ -142,13 +364,14 @@ const AdminDashboard = ({ user, onLogout }) => {
               {/* TAB 2: TODOS LOS INGRESOS */}
               {activeTab === 'ingresos' && (
                 <div className="space-y-4">
-                  <h2 className="text-2xl font-bold text-slate-800">Todos los Ingresos</h2>
+                  <h2 className="text-2xl font-bold text-slate-800">Todos los Ingresos ({ingresos.length})</h2>
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                       <thead>
                         <tr className="border-b-2 border-slate-100 text-slate-500">
                           <th className="p-3">Fecha</th>
                           <th className="p-3">Cargado Por</th>
+                          <th className="p-3">Sprint</th>
                           <th className="p-3">Categoría</th>
                           <th className="p-3">Descripción</th>
                           <th className="p-3">Monto</th>
@@ -156,12 +379,13 @@ const AdminDashboard = ({ user, onLogout }) => {
                       </thead>
                       <tbody>
                         {ingresos.length === 0 ? (
-                          <tr><td colSpan="5" className="p-4 text-center text-slate-400">No hay ingresos registrados.</td></tr>
+                          <tr><td colSpan="6" className="p-4 text-center text-slate-400">No hay ingresos bajo este criterio de filtro.</td></tr>
                         ) : (
                           ingresos.map(i => (
                             <tr key={i.id} className="border-b border-slate-50 hover:bg-slate-50">
                               <td className="p-3 text-sm text-slate-600">{i.fecha ? new Date(i.fecha).toLocaleDateString() : 'Sin Fecha'}</td>
                               <td className="p-3 text-sm font-bold text-slate-700">{i.creado_por || 'Sistema'}</td>
+                              <td className="p-3 text-sm italic text-indigo-600 font-medium">{i.sprints?.nombre || 'Global'}</td>
                               <td className="p-3 text-sm text-slate-600">{i.categoria}</td>
                               <td className="p-3 text-sm text-slate-500">{i.descripcion}</td>
                               <td className="p-3 font-bold text-green-600">${i.monto}</td>
@@ -177,13 +401,14 @@ const AdminDashboard = ({ user, onLogout }) => {
               {/* TAB 3: TODOS LOS GASTOS */}
               {activeTab === 'gastos' && (
                 <div className="space-y-4">
-                  <h2 className="text-2xl font-bold text-slate-800">Todos los Gastos</h2>
+                  <h2 className="text-2xl font-bold text-slate-800">Todos los Gastos ({gastos.length})</h2>
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                       <thead>
                         <tr className="border-b-2 border-slate-100 text-slate-500">
                           <th className="p-3">Fecha</th>
                           <th className="p-3">Empleado</th>
+                          <th className="p-3">Sprint</th>
                           <th className="p-3">Categoría</th>
                           <th className="p-3">Descripción</th>
                           <th className="p-3">Método</th>
@@ -192,12 +417,13 @@ const AdminDashboard = ({ user, onLogout }) => {
                       </thead>
                       <tbody>
                         {gastos.length === 0 ? (
-                          <tr><td colSpan="6" className="p-4 text-center text-slate-400">No hay gastos registrados.</td></tr>
+                          <tr><td colSpan="7" className="p-4 text-center text-slate-400">No hay gastos bajo este criterio de filtro.</td></tr>
                         ) : (
                           gastos.map(g => (
                             <tr key={g.id} className="border-b border-slate-50 hover:bg-slate-50">
                               <td className="p-3 text-sm text-slate-600">{g.fecha_gasto ? new Date(g.fecha_gasto).toLocaleDateString() : 'Sin Fecha'}</td>
                               <td className="p-3 text-sm font-bold text-slate-700">{g.creado_por || 'Desconocido'}</td>
+                              <td className="p-3 text-sm italic text-indigo-600 font-medium">{g.sprints?.nombre || 'Global'}</td>
                               <td className="p-3 text-sm text-slate-600">{g.categoria}</td>
                               <td className="p-3 text-sm text-slate-500">{g.descripcion}</td>
                               <td className="p-3 text-sm text-slate-400">{g.metodo_pago || '—'}</td>
@@ -215,7 +441,7 @@ const AdminDashboard = ({ user, onLogout }) => {
               {activeTab === 'tareas' && (
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
-                    <h2 className="text-2xl font-bold text-slate-800">Tareas de Empleados</h2>
+                    <h2 className="text-2xl font-bold text-slate-800">Tareas de Empleados ({tareas.length})</h2>
                     <button className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-slate-700">Nueva Tarea</button>
                   </div>
                   <div className="space-y-3">

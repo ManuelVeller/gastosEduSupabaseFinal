@@ -1,4 +1,5 @@
 import React from 'react';
+import * as XLSX from 'xlsx'; // Importamos la librería de Excel
 
 function Dashboard({ data, loading }) {
     if (loading) {
@@ -6,6 +7,35 @@ function Dashboard({ data, loading }) {
     }
 
     const { today_total, week_total, month_total, last_expenses } = data;
+
+    // Función para procesar y descargar los gastos actuales a Excel
+    const exportarAExcel = () => {
+        if (!last_expenses || last_expenses.length === 0) {
+            alert("No hay gastos registrados en este período para exportar.");
+            return;
+        }
+
+        try {
+            // 1. Formateamos las columnas para que queden prolijas en español
+            const datosExcel = last_expenses.map(g => ({
+                Fecha: new Date(g.date).toLocaleDateString('es-AR'),
+                Categoría: g.category,
+                Descripción: g.description || '-',
+                Monto: g.amount
+            }));
+
+            // 2. Creamos el libro de Excel
+            const hoja = XLSX.utils.json_to_sheet(datosExcel);
+            const libro = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(libro, hoja, "Gastos del Período");
+            
+            // 3. Descarga automática del archivo xlsx
+            XLSX.writeFile(libro, `Rendicion_Gastos_${new Date().toISOString().split('T')[0]}.xlsx`);
+        } catch (error) {
+            console.error("Error al exportar a Excel:", error);
+            alert("Hubo un error al generar el archivo Excel.");
+        }
+    };
 
     return (
         <div className="space-y-6">
@@ -25,6 +55,16 @@ function Dashboard({ data, loading }) {
                         <span className="text-lg font-bold text-slate-800">${month_total?.toFixed(2) || '0.00'}</span>
                     </div>
                 </div>
+            </div>
+
+            {/* BOTÓN DE EXCEL: Ubicado estratégicamente entre los totales y la lista */}
+            <div className="px-1">
+                <button 
+                    onClick={exportarAExcel}
+                    className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl shadow-sm hover:shadow transition-all flex items-center justify-center gap-2 text-sm border border-emerald-700"
+                >
+                    📊 Descargar Período en Excel
+                </button>
             </div>
 
             <div>
