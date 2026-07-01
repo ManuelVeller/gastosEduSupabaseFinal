@@ -7,25 +7,18 @@ import * as XLSX from 'xlsx';
 const AdminDashboard = ({ user, onLogout }) => {
   const [gastos, setGastos] = useState([]);
   const [ingresos, setIngresos] = useState([]);
-  const [tareas, setTareas] = useState([]);
   const [sprintsHistoricos, setSprintsHistoricos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('resumen');
   const [sprintLoading, setSprintLoading] = useState(false);
 
-  // Estados nuevos para el modal de tareas
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [taskLoading, setTaskLoading] = useState(false);
-  const [taskForm, setTaskForm] = useState({
-    titulo: '',
-    tipo_actividad: 'Desarrollo'
-  });
-
   // Mapeo centralizado de filtros
   const [filtros, setFiltros] = useState({
     periodo: 'activo', // 'activo', 'todos', o el UUID de un sprint cerrado
     fechaDesde: '',
-    fechaHasta: ''
+    fechaHasta: '',
+    categoria: 'todos',
+    medioPago: 'todos'
   });
 
   // 1. Cargar la lista de sprints cerrados para el selector
@@ -57,8 +50,6 @@ const AdminDashboard = ({ user, onLogout }) => {
         .select('*, sprints!fk_ingresos_sprints_unica(nombre)')
         .order('fecha', { ascending: false });
 
-      let queryTareas = supabase.from('tareas').select('*').order('id', { ascending: false });
-
       // --- FILTRO ESTRICTO DE SPRINT ACTIVO ---
       if (filtros.periodo === 'activo') {
         const { data: sprintActivo, error: sprintError } = await supabase
@@ -75,9 +66,6 @@ const AdminDashboard = ({ user, onLogout }) => {
         } else {
           setGastos([]);
           setIngresos([]);
-          
-          const tareasRes = await queryTareas;
-          setTareas(tareasRes.data || []);
           setLoading(false);
           return;
         }
@@ -98,19 +86,16 @@ const AdminDashboard = ({ user, onLogout }) => {
         queryIngresos = queryIngresos.lte('fecha', filtros.fechaHasta);
       }
 
-      const [gastosRes, ingresosRes, tareasRes] = await Promise.all([
+      const [gastosRes, ingresosRes] = await Promise.all([
         queryGastos,
-        queryIngresos,
-        queryTareas
+        queryIngresos
       ]);
 
       if (gastosRes.error) throw gastosRes.error;
       if (ingresosRes.error) throw ingresosRes.error;
-      if (tareasRes.error) throw tareasRes.error;
 
       setGastos(gastosRes.data || []);
       setIngresos(ingresosRes.data || []);
-      setTareas(tareasRes.data || []);
 
     } catch (err) {
       console.error('Error fetching admin data:', err);
@@ -120,43 +105,7 @@ const AdminDashboard = ({ user, onLogout }) => {
     }
   };
 
-  // --- LÓGICA PARA GUARDAR LA NUEVA TAREA EN SUPABASE ---
-  const handleCreateTask = async (e) => {
-    e.preventDefault();
-    if (!taskForm.titulo.trim()) {
-      alert("Por favor, ingresá un título para la tarea.");
-      return;
-    }
 
-    try {
-      setTaskLoading(true);
-      
-      // Enviamos de forma segura sin el campo descripción para evitar errores
-      const { error } = await supabase
-        .from('tareas')
-        .insert([
-          {
-            titulo: taskForm.titulo,
-            tipo_actividad: taskForm.tipo_actividad,
-            creado_por: user?.email || 'Admin',
-            estado: 'pendiente'
-          }
-        ]);
-
-      if (error) throw error;
-
-      alert("🚀 Tarea creada exitosamente.");
-      setTaskForm({ titulo: '', tipo_actividad: 'Desarrollo' });
-      setIsModalOpen(false);
-      fetchAdminData(); // Recarga la lista de tareas al instante
-
-    } catch (err) {
-      console.error('Error al crear tarea:', err);
-      alert('Error al guardar la tarea: ' + err.message);
-    } finally {
-      setTaskLoading(false);
-    }
-  };
 
   useEffect(() => {
     fetchAdminData();
@@ -168,16 +117,16 @@ const AdminDashboard = ({ user, onLogout }) => {
 
   // --- LÓGICA DE EXPORTACIÓN A EXCEL MÚLTIPLE HOJA ---
   const exportarAExcel = () => {
-    if (gastos.length === 0 && ingresos.length === 0) {
-      alert("No hay datos en este período para exportar.");
+    if (filteredGastos.length === 0 && filteredIngresos.length === 0) {
+      alert("No hay datos filtrados en este período para exportar.");
       return;
     }
 
     try {
       const libro = XLSX.utils.book_new();
 
-      if (gastos.length > 0) {
-        const datosGastos = gastos.map(g => ({
+      if (filteredGastos.length > 0) {
+        const datosGastos = filteredGastos.map(g => ({
           Fecha: g.fecha_gasto ? new Date(g.fecha_gasto).toLocaleDateString('es-AR') : 'Sin fecha',
           Empleado: g.creado_por || 'Desconocido',
           Sprint: g.sprints?.nombre || 'Global / Sin asignar',
@@ -190,8 +139,8 @@ const AdminDashboard = ({ user, onLogout }) => {
         XLSX.utils.book_append_sheet(libro, hojaGastos, "Gastos");
       }
 
-      if (ingresos.length > 0) {
-        const datosIngresos = ingresos.map(i => ({
+      if (filteredIngresos.length > 0) {
+        const datosIngresos = filteredIngresos.map(i => ({
           Fecha: i.fecha ? new Date(i.fecha).toLocaleDateString('es-AR') : 'Sin fecha',
           'Cargado Por': i.creado_por || 'Sistema',
           Sprint: i.sprints?.nombre || 'Global / Sin asignar',
@@ -243,14 +192,37 @@ const AdminDashboard = ({ user, onLogout }) => {
     }
   };
 
+  // --- LÓGICA DE FILTRADO INTERACTIVO LOCAL ---
+  const categoriasDisponibles = Array.from(new Set([
+    ...gastos.map(g => g.categoria),
+    ...ingresos.map(i => i.categoria)
+  ])).filter(Boolean).sort();
+
+  const mediosPagoDisponibles = Array.from(new Set([
+    ...gastos.map(g => g.metodo_pago || g.medio_pago),
+    ...ingresos.map(i => i.metodo_pago || i.medio_pago)
+  ])).filter(Boolean).sort();
+
+  const filteredGastos = gastos.filter(g => {
+    if (filtros.categoria !== 'todos' && g.categoria !== filtros.categoria) return false;
+    if (filtros.medioPago !== 'todos' && (g.metodo_pago || g.medio_pago) !== filtros.medioPago) return false;
+    return true;
+  });
+
+  const filteredIngresos = ingresos.filter(i => {
+    if (filtros.categoria !== 'todos' && i.categoria !== filtros.categoria) return false;
+    if (filtros.medioPago !== 'todos' && (i.metodo_pago || i.medio_pago) !== filtros.medioPago) return false;
+    return true;
+  });
+
   const balancePorCategoria = {};
 
-  gastos.forEach(g => {
+  filteredGastos.forEach(g => {
     if (!balancePorCategoria[g.categoria]) balancePorCategoria[g.categoria] = { Gastos: 0, Ingresos: 0 };
     balancePorCategoria[g.categoria].Gastos += parseFloat(g.monto || 0);
   });
 
-  ingresos.forEach(i => {
+  filteredIngresos.forEach(i => {
     if (!balancePorCategoria[i.categoria]) balancePorCategoria[i.categoria] = { Gastos: 0, Ingresos: 0 };
     balancePorCategoria[i.categoria].Ingresos += parseFloat(i.monto || 0);
   });
@@ -261,8 +233,45 @@ const AdminDashboard = ({ user, onLogout }) => {
     Ingresos: balancePorCategoria[key].Ingresos
   }));
 
-  const totalGastos = gastos.reduce((sum, g) => sum + parseFloat(g.monto || 0), 0);
-  const totalIngresos = ingresos.reduce((sum, i) => sum + parseFloat(i.monto || 0), 0);
+  // --- CÁLCULOS DE DESGLOSE DE GASTOS ---
+  const getGastosPorCategoria = () => {
+    const agrupado = {};
+    let total = 0;
+    filteredGastos.forEach(g => {
+      const cat = g.categoria || 'Sin Categoría';
+      const monto = parseFloat(g.monto || 0);
+      agrupado[cat] = (agrupado[cat] || 0) + monto;
+      total += monto;
+    });
+    return Object.entries(agrupado)
+      .map(([categoria, monto]) => ({
+        categoria,
+        monto,
+        porcentaje: total > 0 ? (monto / total) * 100 : 0
+      }))
+      .sort((a, b) => b.monto - a.monto);
+  };
+
+  const getGastosPorMedioPago = () => {
+    const agrupado = {};
+    let total = 0;
+    filteredGastos.forEach(g => {
+      const medio = g.metodo_pago || 'Sin Especificar';
+      const monto = parseFloat(g.monto || 0);
+      agrupado[medio] = (agrupado[medio] || 0) + monto;
+      total += monto;
+    });
+    return Object.entries(agrupado)
+      .map(([medioPago, monto]) => ({
+        medioPago,
+        monto,
+        porcentaje: total > 0 ? (monto / total) * 100 : 0
+      }))
+      .sort((a, b) => b.monto - a.monto);
+  };
+
+  const totalGastos = filteredGastos.reduce((sum, g) => sum + parseFloat(g.monto || 0), 0);
+  const totalIngresos = filteredIngresos.reduce((sum, i) => sum + parseFloat(i.monto || 0), 0);
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans flex flex-col">
@@ -290,53 +299,76 @@ const AdminDashboard = ({ user, onLogout }) => {
           <button onClick={() => setActiveTab('gastos')} className={`flex items-center gap-3 p-3 rounded-xl whitespace-nowrap transition-colors ${activeTab === 'gastos' ? 'bg-red-500 text-white shadow-md' : 'bg-white text-slate-600 hover:bg-slate-50'}`}>
             <FileText className="w-5 h-5" /> Todos los Gastos
           </button>
-          <button onClick={() => setActiveTab('tareas')} className={`flex items-center gap-3 p-3 rounded-xl whitespace-nowrap transition-colors ${activeTab === 'tareas' ? 'bg-slate-700 text-white shadow-md' : 'bg-white text-slate-600 hover:bg-slate-50'}`}>
-            <CheckCircle className="w-5 h-5" /> Tareas
-          </button>
         </nav>
 
         {/* CONTENT AREA */}
         <div className="flex-1 bg-white rounded-3xl shadow-sm border border-slate-100 p-6 min-h-[500px]">
           
           {/* SECCIÓN GLOBAL DE FILTROS */}
-          {activeTab === 'resumen' && (
-            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Filtrar Período</label>
-                <select 
-                  value={filtros.periodo} 
-                  onChange={(e) => setFiltros({ ...filtros, periodo: e.target.value })}
-                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm font-semibold text-slate-700 outline-none cursor-pointer"
-                >
-                  <option value="activo">⚡ Sprint Actual Activo</option>
-                  <option value="todos">🌍 Ver Histórico Completo</option>
-                  {sprintsHistoricos.map(s => (
-                    <option key={s.id} value={s.id}>🛑 {s.nombre} ({new Date(s.fecha_inicio).toLocaleDateString('es-AR')})</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Desde Fecha</label>
-                <input 
-                  type="date" 
-                  value={filtros.fechaDesde} 
-                  onChange={(e) => setFiltros({ ...filtros, fechaDesde: e.target.value, periodo: e.target.value ? 'personalizado' : filtros.periodo })}
-                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm font-semibold text-slate-700 outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Hasta Fecha</label>
-                <input 
-                  type="date" 
-                  value={filtros.fechaHasta} 
-                  onChange={(e) => setFiltros({ ...filtros, fechaHasta: e.target.value, periodo: e.target.value ? 'personalizado' : filtros.periodo })}
-                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm font-semibold text-slate-700 outline-none"
-                />
-              </div>
+          <div className="bg-slate-50 rounded-3xl border border-slate-200 grid grid-cols-1 gap-4 p-4 md:grid-cols-3 lg:flex lg:flex-row mb-6">
+            <div className="w-full lg:flex-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Filtrar Período</label>
+              <select 
+                value={filtros.periodo} 
+                onChange={(e) => setFiltros({ ...filtros, periodo: e.target.value })}
+                className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none cursor-pointer pr-8 focus:border-indigo-500 transition-colors"
+              >
+                <option value="activo">⚡ Sprint Actual Activo</option>
+                <option value="todos">🌍 Ver Histórico Completo</option>
+                {sprintsHistoricos.map(s => (
+                  <option key={s.id} value={s.id}>🛑 {s.nombre} ({new Date(s.fecha_inicio).toLocaleDateString('es-AR')})</option>
+                ))}
+              </select>
             </div>
-          )}
+
+            <div className="w-full lg:flex-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Desde Fecha</label>
+              <input 
+                type="date" 
+                value={filtros.fechaDesde} 
+                onChange={(e) => setFiltros({ ...filtros, fechaDesde: e.target.value, periodo: e.target.value ? 'personalizado' : filtros.periodo })}
+                className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none focus:border-indigo-500 transition-colors"
+              />
+            </div>
+
+            <div className="w-full lg:flex-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Hasta Fecha</label>
+              <input 
+                type="date" 
+                value={filtros.fechaHasta} 
+                onChange={(e) => setFiltros({ ...filtros, fechaHasta: e.target.value, periodo: e.target.value ? 'personalizado' : filtros.periodo })}
+                className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none focus:border-indigo-500 transition-colors"
+              />
+            </div>
+
+            <div className="w-full lg:flex-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Filtrar por Categoría</label>
+              <select 
+                value={filtros.categoria} 
+                onChange={(e) => setFiltros({ ...filtros, categoria: e.target.value })}
+                className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none cursor-pointer pr-8 focus:border-indigo-500 transition-colors"
+              >
+                <option value="todos">✨ Todas las Categorías</option>
+                {categoriasDisponibles.map(cat => (
+                  <option key={cat} value={cat}>{cat}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="w-full lg:flex-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Filtrar por Medio de Pago</label>
+              <select 
+                value={filtros.medioPago} 
+                onChange={(e) => setFiltros({ ...filtros, medioPago: e.target.value })}
+                className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none cursor-pointer pr-8 focus:border-indigo-500 transition-colors"
+              >
+                <option value="todos">💳 Todos los Medios</option>
+                {mediosPagoDisponibles.map(mp => (
+                  <option key={mp} value={mp}>{mp}</option>
+                ))}
+              </select>
+            </div>
+          </div>
 
           {loading ? (
             <div className="h-full flex items-center justify-center text-slate-400">Cargando datos filtrados...</div>
@@ -347,7 +379,7 @@ const AdminDashboard = ({ user, onLogout }) => {
                 <div className="space-y-6">
                   <h2 className="text-2xl font-bold text-slate-800">Resumen General</h2>
                   
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div className="bg-green-50 p-4 rounded-xl border border-green-100">
                       <p className="text-sm text-green-700 font-medium">Ingresos Totales</p>
                       <p className="text-3xl font-black text-green-600">${totalIngresos.toFixed(2)}</p>
@@ -362,10 +394,75 @@ const AdminDashboard = ({ user, onLogout }) => {
                         ${(totalIngresos - totalGastos).toFixed(2)}
                       </p>
                     </div>
-                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                      <p className="text-sm text-slate-500 font-medium">Tareas Pendientes</p>
-                      <p className="text-3xl font-black text-amber-500">{tareas.filter(t => t.estado === 'pendiente').length}</p>
+                  </div>
+
+                  {/* DESGLOSE DE GASTOS EN DOS COLUMNAS */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-slate-50/50 p-6 rounded-2xl border border-slate-100">
+                    
+                    {/* Columna 1: Por Categoría */}
+                    <div className="bg-white p-5 rounded-xl border border-slate-100 shadow-sm space-y-4">
+                      <div className="flex items-center gap-2 border-b border-slate-50 pb-2">
+                        <span className="text-lg">📁</span>
+                        <h3 className="font-extrabold text-sm text-slate-700 uppercase tracking-wider">Gastos por Categoría</h3>
+                      </div>
+                      
+                      {getGastosPorCategoria().length === 0 ? (
+                        <p className="text-slate-400 text-xs italic">No hay gastos registrados en este período.</p>
+                      ) : (
+                        <div className="space-y-3 max-h-[250px] overflow-y-auto pr-1 no-scrollbar">
+                          {getGastosPorCategoria().map((item, idx) => (
+                            <div key={idx} className="space-y-1">
+                              <div className="flex justify-between text-xs font-bold">
+                                <span className="text-slate-600">{item.categoria}</span>
+                                <span className="text-red-500">${item.monto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              </div>
+                              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                                <div 
+                                  className="bg-indigo-500 h-full rounded-full transition-all duration-500" 
+                                  style={{ width: `${item.porcentaje}%` }} 
+                                />
+                              </div>
+                              <div className="text-[10px] text-slate-400 text-right font-medium">
+                                {item.porcentaje.toFixed(1)}% del total
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
+
+                    {/* Columna 2: Por Medio de Pago */}
+                    <div className="bg-white p-5 rounded-xl border border-slate-100 shadow-sm space-y-4">
+                      <div className="flex items-center gap-2 border-b border-slate-50 pb-2">
+                        <span className="text-lg">💳</span>
+                        <h3 className="font-extrabold text-sm text-slate-700 uppercase tracking-wider">Gastos por Medio de Pago</h3>
+                      </div>
+
+                      {getGastosPorMedioPago().length === 0 ? (
+                        <p className="text-slate-400 text-xs italic">No hay gastos registrados en este período.</p>
+                      ) : (
+                        <div className="space-y-3 max-h-[250px] overflow-y-auto pr-1 no-scrollbar">
+                          {getGastosPorMedioPago().map((item, idx) => (
+                            <div key={idx} className="space-y-1">
+                              <div className="flex justify-between text-xs font-bold">
+                                <span className="text-slate-600">{item.medioPago}</span>
+                                <span className="text-red-500">${item.monto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              </div>
+                              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                                <div 
+                                  className="bg-emerald-500 h-full rounded-full transition-all duration-500" 
+                                  style={{ width: `${item.porcentaje}%` }} 
+                                />
+                              </div>
+                              <div className="text-[10px] text-slate-400 text-right font-medium">
+                                {item.porcentaje.toFixed(1)}% del total
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
@@ -402,7 +499,7 @@ const AdminDashboard = ({ user, onLogout }) => {
               {/* TAB 2: TODOS LOS INGRESOS */}
               {activeTab === 'ingresos' && (
                 <div className="space-y-4">
-                  <h2 className="text-2xl font-bold text-slate-800">Todos los Ingresos ({ingresos.length})</h2>
+                  <h2 className="text-2xl font-bold text-slate-800">Todos los Ingresos ({filteredIngresos.length})</h2>
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                       <thead>
@@ -416,10 +513,10 @@ const AdminDashboard = ({ user, onLogout }) => {
                         </tr>
                       </thead>
                       <tbody>
-                        {ingresos.length === 0 ? (
+                        {filteredIngresos.length === 0 ? (
                           <tr><td colSpan="6" className="p-4 text-center text-slate-400">No hay ingresos bajo este criterio de filtro.</td></tr>
                         ) : (
-                          ingresos.map(i => (
+                          filteredIngresos.map(i => (
                             <tr key={i.id} className="border-b border-slate-50 hover:bg-slate-50">
                               <td className="p-3 text-sm text-slate-600">{i.fecha ? new Date(i.fecha).toLocaleDateString() : 'Sin Fecha'}</td>
                               <td className="p-3 text-sm font-bold text-slate-700">{i.creado_por || 'Sistema'}</td>
@@ -439,7 +536,7 @@ const AdminDashboard = ({ user, onLogout }) => {
               {/* TAB 3: TODOS LOS GASTOS */}
               {activeTab === 'gastos' && (
                 <div className="space-y-4">
-                  <h2 className="text-2xl font-bold text-slate-800">Todos los Gastos ({gastos.length})</h2>
+                  <h2 className="text-2xl font-bold text-slate-800">Todos los Gastos ({filteredGastos.length})</h2>
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                       <thead>
@@ -454,10 +551,10 @@ const AdminDashboard = ({ user, onLogout }) => {
                         </tr>
                       </thead>
                       <tbody>
-                        {gastos.length === 0 ? (
+                        {filteredGastos.length === 0 ? (
                           <tr><td colSpan="7" className="p-4 text-center text-slate-400">No hay gastos bajo este criterio de filtro.</td></tr>
                         ) : (
-                          gastos.map(g => (
+                          filteredGastos.map(g => (
                             <tr key={g.id} className="border-b border-slate-50 hover:bg-slate-50">
                               <td className="p-3 text-sm text-slate-600">{g.fecha_gasto ? new Date(g.fecha_gasto).toLocaleDateString() : 'Sin Fecha'}</td>
                               <td className="p-3 text-sm font-bold text-slate-700">{g.creado_por || 'Desconocido'}</td>
@@ -474,105 +571,10 @@ const AdminDashboard = ({ user, onLogout }) => {
                   </div>
                 </div>
               )}
-
-              {/* TAB 4: TAREAS (CON MODAL INTEGRADO) */}
-              {activeTab === 'tareas' && (
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center">
-                    <h2 className="text-2xl font-bold text-slate-800">Tareas de Empleados ({tareas.length})</h2>
-                    <button 
-                      onClick={() => setIsModalOpen(true)}
-                      className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-slate-700 transition-colors"
-                    >
-                      Nueva Tarea
-                    </button>
-                  </div>
-                  <div className="space-y-3">
-                    {tareas.length === 0 ? (
-                      <p className="text-slate-400">No hay tareas creadas.</p>
-                    ) : (
-                      tareas.map(t => (
-                        <div key={t.id} className="border border-slate-100 p-4 rounded-xl flex justify-between items-center bg-slate-50">
-                          <div>
-                            <h4 className="font-bold text-slate-700">{t.titulo}</h4>
-                            <p className="text-xs bg-slate-200 text-slate-700 px-2 py-0.5 rounded width-fit inline-block mb-1 font-medium">{t.tipo_actividad || 'General'}</p>
-                            <p className="text-xs text-slate-500">Asignada a: {t.creado_por || 'Empleado'}</p>
-                          </div>
-                          <div>
-                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${t.estado === 'completada' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                              {t.estado}
-                            </span>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
             </>
           )}
         </div>
       </main>
-
-      {/* VENTANA MODAL COMPLEMENTARIA PARA CREAR LA TAREA */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl relative animate-in fade-in zoom-in-95 duration-150">
-            <button 
-              onClick={() => setIsModalOpen(false)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            <h3 className="text-lg font-bold text-slate-800 mb-4">Crear Nueva Tarea</h3>
-            
-            <form onSubmit={handleCreateTask} className="space-y-4">
-              <div>
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-1">Título de la Tarea *</label>
-                <input 
-                  type="text"
-                  required
-                  placeholder="Ej: Resolver conciliación bancaria"
-                  value={taskForm.titulo}
-                  onChange={(e) => setTaskForm({...taskForm, titulo: e.target.value})}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-sm font-medium text-slate-800 outline-none focus:border-slate-400"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-1">Tipo de Actividad</label>
-                <select
-                  value={taskForm.tipo_actividad}
-                  onChange={(e) => setTaskForm({...taskForm, tipo_actividad: e.target.value})}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-sm font-medium text-slate-800 outline-none cursor-pointer focus:border-slate-400"
-                >
-                  <option value="Desarrollo">💻 Desarrollo / Sistemas</option>
-                  <option value="Administracion">💼 Administración / Caja</option>
-                  <option value="Soporte">🛠️ Soporte / Tickets</option>
-                  <option value="Diseño">🎨 Diseño / UX</option>
-                </select>
-              </div>
-
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="flex-1 py-2 border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold rounded-xl text-sm transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={taskLoading}
-                  className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white font-semibold rounded-xl text-sm transition-colors"
-                >
-                  {taskLoading ? 'Guardando...' : 'Guardar Tarea'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import ExpenseForm from './ExpenseForm';
 import { supabase } from '../supabaseClient';
-import { UserX } from 'lucide-react';
+import { UserX, ArrowLeft } from 'lucide-react';
 
 const EmployeeDashboard = ({ empleado, onResetName }) => {
+  const navigate = useNavigate();
   const [registros, setRegistros] = useState([]);
   const [loading, setLoading] = useState(true);
   
@@ -47,7 +49,13 @@ const EmployeeDashboard = ({ empleado, onResetName }) => {
         
         {/* HEADER */}
         <header className="bg-slate-800 text-white p-6 pb-8 text-center rounded-b-[2rem] shadow-md z-10 relative flex justify-between items-center">
-          <div className="w-8"></div> 
+          <button 
+            onClick={() => navigate('/')} 
+            className="p-2 hover:bg-white/20 rounded-full transition-colors flex items-center justify-center" 
+            title="Volver al Menú Principal"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button> 
           <div>
             <h1 className="text-2xl font-bold tracking-tight mb-1">¡Hola, {empleado}!</h1>
             <p className="text-slate-300 text-sm font-medium">Panel de Carga Directa</p>

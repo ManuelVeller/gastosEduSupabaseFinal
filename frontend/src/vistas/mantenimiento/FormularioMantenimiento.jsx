@@ -89,6 +89,11 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
       return;
     }
 
+    if (!selectedVehiculo) {
+      setErrorText('La patente ingresada no corresponde a ningún vehículo de la flota.');
+      return;
+    }
+
     setLoading(true);
     setErrorText('');
 
@@ -102,7 +107,24 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
       const offset = ahora.getTimezoneOffset() * 60000;
       const fechaLocal = new Date(ahora.getTime() - offset).toISOString().split('T')[0];
 
-      // 1. Guardar en tabla GASTOS para impactar en Finanzas
+      // 1. Guardar en historial_services
+      const serviceRecord = {
+        vehiculo_id: selectedVehiculo.id,
+        km_servicio: numKm,
+        tipo_aceite: selectedVehiculo.tipo_aceite || 'No especificado',
+        detalles: mantenimiento,
+        monto: numTotal,
+        medio_pago: medioPago,
+        fecha: fechaLocal
+      };
+
+      const { error: serviceError } = await supabase
+        .from('historial_services')
+        .insert([serviceRecord]);
+
+      if (serviceError) throw serviceError;
+
+      // 2. Guardar en tabla GASTOS para impactar en Finanzas
       const gastoRecord = {
         monto: numTotal,
         categoria: 'Mantenimiento',
@@ -119,17 +141,13 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
 
       if (gastoError) throw gastoError;
 
-      // 2. Actualizar KM del vehículo si existe en la base de datos
-      if (selectedVehiculo) {
-        const { error: kmError } = await supabase
-          .from('vehiculos')
-          .update({ km_actual: numKm })
-          .eq('id', selectedVehiculo.id);
+      // 3. Actualizar KM del vehículo en la tabla vehiculos
+      const { error: kmError } = await supabase
+        .from('vehiculos')
+        .update({ km_actual: numKm })
+        .eq('id', selectedVehiculo.id);
 
-        if (kmError) {
-          console.warn('No se pudo actualizar el kilometraje del vehículo:', kmError.message);
-        }
-      }
+      if (kmError) throw kmError;
 
       setSuccess(true);
       setTimeout(() => {
@@ -147,6 +165,7 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
       setLoading(false);
     }
   };
+
 
   return (
     <div className="bg-white rounded-[2rem] p-8 shadow-xl border border-slate-100 relative overflow-hidden">
