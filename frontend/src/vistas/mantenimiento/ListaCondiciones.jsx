@@ -1,0 +1,266 @@
+import React, { useState, useEffect } from 'react';
+import { supabase } from '../../supabaseClient';
+import { Car, Shield, AlertCircle, Wrench, Search, RefreshCw, Layers } from 'lucide-react';
+
+function ListaCondiciones({ onRegisterMaintenance }) {
+  const [vehiculos, setVehiculos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('Todos');
+
+  // --- CARGAR ESTADOS DESDE LOCALSTORAGE ---
+  const [estados, setEstados] = useState(() => {
+    const saved = localStorage.getItem('fleet_status');
+    return saved ? JSON.parse(saved) : {};
+  });
+
+  // --- OBTENER VEHÍCULOS DESDE SUPABASE ---
+  const fetchVehiculos = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('vehiculos')
+        .select('*')
+        .order('patente', { ascending: true });
+
+      if (error) throw error;
+      setVehiculos(data || []);
+    } catch (err) {
+      console.error('Error fetching fleet vehicles:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchVehiculos();
+  }, []);
+
+  // --- GUARDAR ESTADO EN LOCALSTORAGE AL CAMBIAR ---
+  const handleStatusChange = (patente, nuevoEstado) => {
+    const updated = { ...estados, [patente]: nuevoEstado };
+    setEstados(updated);
+    localStorage.setItem('fleet_status', JSON.stringify(updated));
+  };
+
+  // --- OBTENER ESTADO ACTUAL DE UN VEHÍCULO (POR DEFECTO 'Operativo') ---
+  const getEstado = (patente) => {
+    return estados[patente] || 'Operativo';
+  };
+
+  // --- ESTILOS DINÁMICOS SEGÚN EL ESTADO ---
+  const getStatusStyles = (status) => {
+    switch (status) {
+      case 'Operativo':
+        return 'bg-emerald-50 text-emerald-700 border-emerald-200 focus:ring-emerald-500';
+      case 'En Taller':
+        return 'bg-amber-50 text-amber-700 border-amber-200 focus:ring-amber-500';
+      case 'Requiere Service':
+        return 'bg-rose-50 text-rose-700 border-rose-200 focus:ring-rose-500';
+      default:
+        return 'bg-slate-50 text-slate-700 border-slate-200 focus:ring-slate-500';
+    }
+  };
+
+  // --- CONTEO DE ESTADOS PARA RESUMEN ---
+  const stats = vehiculos.reduce(
+    (acc, v) => {
+      const status = getEstado(v.patente);
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    },
+    { Operativo: 0, 'En Taller': 0, 'Requiere Service': 0 }
+  );
+
+  // --- FILTRAR VEHÍCULOS ---
+  const filteredVehiculos = vehiculos.filter((v) => {
+    const matchesSearch =
+      v.patente.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      v.marca_modelo.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesFilter =
+      statusFilter === 'Todos' || getEstado(v.patente) === statusFilter;
+    return matchesSearch && matchesFilter;
+  });
+
+  return (
+    <div className="space-y-6">
+      
+      {/* TARJETAS DE INDICADORES / CONTADORES */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        
+        {/* TOTAL VEHÍCULOS */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Total Flota</span>
+            <span className="text-2xl font-black text-slate-800">{vehiculos.length}</span>
+          </div>
+          <div className="p-3 bg-slate-50 text-slate-500 rounded-xl">
+            <Car className="w-6 h-6" />
+          </div>
+        </div>
+
+        {/* OPERATIVOS */}
+        <div className="bg-emerald-50/30 p-5 rounded-2xl border border-emerald-50 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-xs font-bold text-emerald-600/80 uppercase tracking-wider block">Operativos</span>
+            <span className="text-2xl font-black text-emerald-600">{stats.Operativo}</span>
+          </div>
+          <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
+            <Shield className="w-6 h-6" />
+          </div>
+        </div>
+
+        {/* EN TALLER */}
+        <div className="bg-amber-50/30 p-5 rounded-2xl border border-amber-50 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-xs font-bold text-amber-600/80 uppercase tracking-wider block">En Taller</span>
+            <span className="text-2xl font-black text-amber-600">{stats['En Taller']}</span>
+          </div>
+          <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
+            <Wrench className="w-6 h-6" />
+          </div>
+        </div>
+
+        {/* REQUIERE SERVICE */}
+        <div className="bg-rose-50/30 p-5 rounded-2xl border border-rose-50 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-xs font-bold text-rose-600/80 uppercase tracking-wider block">Req. Service</span>
+            <span className="text-2xl font-black text-rose-600">{stats['Requiere Service']}</span>
+          </div>
+          <div className="p-3 bg-rose-50 text-rose-600 rounded-xl">
+            <AlertCircle className="w-6 h-6" />
+          </div>
+        </div>
+
+      </div>
+
+      {/* CONTROLES DE BÚSQUEDA Y FILTRADO */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between">
+        
+        {/* BUSCADOR */}
+        <div className="relative w-full md:w-80">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            placeholder="Buscar por patente o modelo..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm font-semibold text-slate-700 outline-none focus:border-blue-500 focus:bg-white transition-all placeholder:text-slate-400"
+          />
+        </div>
+
+        {/* FILTRADO DE ESTADO */}
+        <div className="flex gap-2 w-full md:w-auto overflow-x-auto no-scrollbar">
+          {['Todos', 'Operativo', 'En Taller', 'Requiere Service'].map((filter) => (
+            <button
+              key={filter}
+              onClick={() => setStatusFilter(filter)}
+              className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all whitespace-nowrap ${
+                statusFilter === filter
+                  ? 'bg-slate-800 text-white border-slate-800 shadow-sm'
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              {filter}
+            </button>
+          ))}
+        </div>
+
+        {/* RECARGAR */}
+        <button
+          onClick={fetchVehiculos}
+          className="p-2.5 bg-slate-50 text-slate-500 hover:text-slate-700 rounded-xl border border-slate-200 hover:bg-slate-100 transition-colors shrink-0"
+          title="Recargar flota"
+        >
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+        </button>
+
+      </div>
+
+      {/* CUADRICULA DE VEHÍCULOS */}
+      {loading ? (
+        <div className="text-center py-12 bg-white rounded-3xl border border-slate-100 shadow-sm">
+          <RefreshCw className="w-8 h-8 text-blue-500 animate-spin mx-auto mb-3" />
+          <p className="text-slate-500 font-semibold">Cargando flota de vehículos...</p>
+        </div>
+      ) : filteredVehiculos.length === 0 ? (
+        <div className="text-center py-12 bg-white rounded-3xl border border-slate-100 shadow-sm">
+          <p className="text-slate-400 font-semibold">No se encontraron vehículos bajo esta búsqueda.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+          {filteredVehiculos.map((v) => {
+            const currentStatus = getEstado(v.patente);
+            return (
+              <div
+                key={v.id}
+                className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4 hover:-translate-y-0.5 duration-300"
+              >
+                
+                {/* CABECERA TARJETA (Patente y Selector Estado) */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="inline-block px-3 py-1 bg-slate-900 text-white font-mono text-sm rounded-lg border-2 border-slate-800 shadow-sm tracking-widest font-black uppercase">
+                    {v.patente}
+                  </div>
+                  
+                  {/* SELECTOR DE ESTADO */}
+                  <div className="relative">
+                    <select
+                      value={currentStatus}
+                      onChange={(e) => handleStatusChange(v.patente, e.target.value)}
+                      className={`text-xs font-bold border-2 rounded-lg py-1 pl-2.5 pr-6 outline-none cursor-pointer appearance-none transition-all ${getStatusStyles(
+                        currentStatus
+                      )}`}
+                    >
+                      <option value="Operativo">Operativo</option>
+                      <option value="En Taller">En Taller</option>
+                      <option value="Requiere Service">Requiere Service</option>
+                    </select>
+                    <span className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
+                      ▼
+                    </span>
+                  </div>
+                </div>
+
+                {/* DETALLES DEL VEHÍCULO */}
+                <div className="space-y-2">
+                  <h4 className="font-bold text-slate-800 text-lg leading-tight">
+                    {v.marca_modelo}
+                  </h4>
+                  
+                  <div className="flex justify-between items-center text-xs border-t border-slate-50 pt-2 text-slate-500 font-medium">
+                    <span>Kilometraje:</span>
+                    <span className="font-bold text-slate-700 bg-slate-50 px-2 py-1 rounded-md">
+                      {v.km_actual ? v.km_actual.toLocaleString() : '0'} km
+                    </span>
+                  </div>
+
+                  {v.tipo_aceite && (
+                    <div className="flex justify-between items-center text-[10px] text-slate-400 font-medium">
+                      <span>Aceite recomendado:</span>
+                      <span className="italic">{v.tipo_aceite}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* BOTÓN RÁPIDO PARA REGISTRAR MANTENIMIENTO */}
+                {onRegisterMaintenance && (
+                  <button
+                    onClick={() => onRegisterMaintenance(v.patente)}
+                    className="w-full py-2 bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 rounded-xl text-xs font-bold transition-all border border-dashed border-slate-200 hover:border-blue-200 flex items-center justify-center gap-1.5"
+                  >
+                    <Wrench className="w-3.5 h-3.5" /> Registrar Mantenimiento
+                  </button>
+                )}
+
+              </div>
+            );
+          })}
+        </div>
+      )}
+      
+    </div>
+  );
+}
+
+export default ListaCondiciones;

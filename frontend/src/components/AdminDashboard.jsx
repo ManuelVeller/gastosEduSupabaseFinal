@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
-import { LogOut, FileText, CheckCircle, PieChart, ArrowUpRight } from 'lucide-react';
+import { LogOut, FileText, CheckCircle, PieChart, ArrowUpRight, X } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import * as XLSX from 'xlsx';
 
@@ -12,6 +12,14 @@ const AdminDashboard = ({ user, onLogout }) => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('resumen');
   const [sprintLoading, setSprintLoading] = useState(false);
+
+  // Estados nuevos para el modal de tareas
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [taskLoading, setTaskLoading] = useState(false);
+  const [taskForm, setTaskForm] = useState({
+    titulo: '',
+    tipo_actividad: 'Desarrollo'
+  });
 
   // Mapeo centralizado de filtros
   const [filtros, setFiltros] = useState({
@@ -39,7 +47,6 @@ const AdminDashboard = ({ user, onLogout }) => {
     try {
       setLoading(true);
 
-      // Usamos el signo de exclamación para forzar a Supabase a usar la relación limpia que creamos
       let queryGastos = supabase
         .from('gastos')
         .select('*, sprints!fk_gastos_sprints_unica(nombre)')
@@ -50,7 +57,7 @@ const AdminDashboard = ({ user, onLogout }) => {
         .select('*, sprints!fk_ingresos_sprints_unica(nombre)')
         .order('fecha', { ascending: false });
 
-      let queryTareas = supabase.from('tareas').select('*'); // Las tareas quedan globales
+      let queryTareas = supabase.from('tareas').select('*').order('id', { ascending: false });
 
       // --- FILTRO ESTRICTO DE SPRINT ACTIVO ---
       if (filtros.periodo === 'activo') {
@@ -66,8 +73,6 @@ const AdminDashboard = ({ user, onLogout }) => {
           queryGastos = queryGastos.eq('sprint_id', sprintActivo.id);
           queryIngresos = queryIngresos.eq('sprint_id', sprintActivo.id);
         } else {
-          // Si elegiste "Sprint Activo" pero no hay ninguno abierto, 
-          // mostramos finanzas en 0 pero dejamos que carguen las tareas globales con normalidad
           setGastos([]);
           setIngresos([]);
           
@@ -93,7 +98,6 @@ const AdminDashboard = ({ user, onLogout }) => {
         queryIngresos = queryIngresos.lte('fecha', filtros.fechaHasta);
       }
 
-      // Ejecución paralela de las consultas ya filtradas
       const [gastosRes, ingresosRes, tareasRes] = await Promise.all([
         queryGastos,
         queryIngresos,
@@ -116,12 +120,48 @@ const AdminDashboard = ({ user, onLogout }) => {
     }
   };
 
-  // Disparar recarga global cuando cambie cualquier filtro
+  // --- LÓGICA PARA GUARDAR LA NUEVA TAREA EN SUPABASE ---
+  const handleCreateTask = async (e) => {
+    e.preventDefault();
+    if (!taskForm.titulo.trim()) {
+      alert("Por favor, ingresá un título para la tarea.");
+      return;
+    }
+
+    try {
+      setTaskLoading(true);
+      
+      // Enviamos de forma segura sin el campo descripción para evitar errores
+      const { error } = await supabase
+        .from('tareas')
+        .insert([
+          {
+            titulo: taskForm.titulo,
+            tipo_actividad: taskForm.tipo_actividad,
+            creado_por: user?.email || 'Admin',
+            estado: 'pendiente'
+          }
+        ]);
+
+      if (error) throw error;
+
+      alert("🚀 Tarea creada exitosamente.");
+      setTaskForm({ titulo: '', tipo_actividad: 'Desarrollo' });
+      setIsModalOpen(false);
+      fetchAdminData(); // Recarga la lista de tareas al instante
+
+    } catch (err) {
+      console.error('Error al crear tarea:', err);
+      alert('Error al guardar la tarea: ' + err.message);
+    } finally {
+      setTaskLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchAdminData();
   }, [filtros]);
 
-  // Cargar lista de opciones del selector al montar el componente
   useEffect(() => {
     fetchSprints();
   }, []);
@@ -203,7 +243,6 @@ const AdminDashboard = ({ user, onLogout }) => {
     }
   };
 
-  // --- PROCESAMIENTO DE DATOS PARA EL GRÁFICO COMPARATIVO ---
   const balancePorCategoria = {};
 
   gastos.forEach(g => {
@@ -345,7 +384,6 @@ const AdminDashboard = ({ user, onLogout }) => {
                     </button>
                   </div>
 
-                  {/* Gráfico dual Recharts */}
                   <div className="h-[320px] mt-4 w-full">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={chartData}>
@@ -437,12 +475,17 @@ const AdminDashboard = ({ user, onLogout }) => {
                 </div>
               )}
 
-              {/* TAB 4: TAREAS */}
+              {/* TAB 4: TAREAS (CON MODAL INTEGRADO) */}
               {activeTab === 'tareas' && (
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
                     <h2 className="text-2xl font-bold text-slate-800">Tareas de Empleados ({tareas.length})</h2>
-                    <button className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-slate-700">Nueva Tarea</button>
+                    <button 
+                      onClick={() => setIsModalOpen(true)}
+                      className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-slate-700 transition-colors"
+                    >
+                      Nueva Tarea
+                    </button>
                   </div>
                   <div className="space-y-3">
                     {tareas.length === 0 ? (
@@ -452,7 +495,8 @@ const AdminDashboard = ({ user, onLogout }) => {
                         <div key={t.id} className="border border-slate-100 p-4 rounded-xl flex justify-between items-center bg-slate-50">
                           <div>
                             <h4 className="font-bold text-slate-700">{t.titulo}</h4>
-                            <p className="text-sm text-slate-500">Asignada a: {t.creado_por || 'Empleado'}</p>
+                            <p className="text-xs bg-slate-200 text-slate-700 px-2 py-0.5 rounded width-fit inline-block mb-1 font-medium">{t.tipo_actividad || 'General'}</p>
+                            <p className="text-xs text-slate-500">Asignada a: {t.creado_por || 'Empleado'}</p>
                           </div>
                           <div>
                             <span className={`px-3 py-1 rounded-full text-xs font-bold ${t.estado === 'completada' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
@@ -469,6 +513,66 @@ const AdminDashboard = ({ user, onLogout }) => {
           )}
         </div>
       </main>
+
+      {/* VENTANA MODAL COMPLEMENTARIA PARA CREAR LA TAREA */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl relative animate-in fade-in zoom-in-95 duration-150">
+            <button 
+              onClick={() => setIsModalOpen(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-lg font-bold text-slate-800 mb-4">Crear Nueva Tarea</h3>
+            
+            <form onSubmit={handleCreateTask} className="space-y-4">
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-1">Título de la Tarea *</label>
+                <input 
+                  type="text"
+                  required
+                  placeholder="Ej: Resolver conciliación bancaria"
+                  value={taskForm.titulo}
+                  onChange={(e) => setTaskForm({...taskForm, titulo: e.target.value})}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-sm font-medium text-slate-800 outline-none focus:border-slate-400"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-1">Tipo de Actividad</label>
+                <select
+                  value={taskForm.tipo_actividad}
+                  onChange={(e) => setTaskForm({...taskForm, tipo_actividad: e.target.value})}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-sm font-medium text-slate-800 outline-none cursor-pointer focus:border-slate-400"
+                >
+                  <option value="Desarrollo">💻 Desarrollo / Sistemas</option>
+                  <option value="Administracion">💼 Administración / Caja</option>
+                  <option value="Soporte">🛠️ Soporte / Tickets</option>
+                  <option value="Diseño">🎨 Diseño / UX</option>
+                </select>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="flex-1 py-2 border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold rounded-xl text-sm transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={taskLoading}
+                  className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white font-semibold rounded-xl text-sm transition-colors"
+                >
+                  {taskLoading ? 'Guardando...' : 'Guardar Tarea'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

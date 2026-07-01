@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import EmployeeDashboard from './components/EmployeeDashboard';
 import AdminDashboard from './components/AdminDashboard';
+import MenuPrincipal from './vistas/MenuPrincipal';
+import MantenimientoDashboard from './vistas/mantenimiento/MantenimientoDashboard';
+import { Wrench, ClipboardList } from 'lucide-react';
 
 function App() {
   const [isAdmin, setIsAdmin] = useState(false);
@@ -48,7 +51,7 @@ function App() {
 
   const handleLogout = () => {
     setIsAdmin(false);
-    navigate('/employee', { replace: true });
+    navigate('/finanzas', { replace: true });
   };
 
   if (loading) {
@@ -115,8 +118,9 @@ function App() {
     <div className="min-h-screen flex flex-col justify-between bg-slate-50">
       <div className="flex-grow">
         <Routes>
+          <Route path="/" element={<MenuPrincipal />} />
           <Route 
-            path="/employee" 
+            path="/finanzas" 
             element={
               <EmployeeDashboard 
                 empleado={empleado} 
@@ -126,9 +130,11 @@ function App() {
           />
           <Route 
             path="/admin" 
-            element={isAdmin ? <AdminDashboard onLogout={handleLogout} /> : <Navigate to="/employee" replace />} 
+            element={isAdmin ? <AdminDashboard onLogout={handleLogout} /> : <Navigate to="/finanzas" replace />} 
           />
-          <Route path="*" element={<Navigate to="/employee" replace />} />
+          <Route path="/mantenimiento" element={<MantenimientoDashboard />} />
+          <Route path="/tareas" element={<TareasPlaceholder />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
 
@@ -138,6 +144,48 @@ function App() {
           ⚙️ Panel de Control
         </button>
       </footer>
+    </div>
+  );
+}
+
+function MantenimientoPlaceholder() {
+  const navigate = useNavigate();
+  return (
+    <div className="min-h-[75vh] flex flex-col items-center justify-center px-4 text-center">
+      <div className="p-4 bg-blue-50 text-blue-600 rounded-2xl mb-6 shadow-inner animate-pulse">
+        <Wrench className="w-12 h-12 stroke-[2]" />
+      </div>
+      <h2 className="text-2xl font-bold text-slate-800 mb-2">Mantenimiento de Flota</h2>
+      <p className="text-slate-500 max-w-sm mb-8 leading-relaxed">
+        Este módulo se encuentra bajo desarrollo activo. Pronto podrás registrar services, reparaciones y controlar el estado de toda la flota.
+      </p>
+      <button 
+        onClick={() => navigate('/')} 
+        className="px-6 py-2.5 bg-slate-800 text-white font-medium rounded-xl hover:bg-slate-700 hover:scale-[1.02] active:scale-[0.98] transition-all shadow-sm"
+      >
+        Volver al Menú Principal
+      </button>
+    </div>
+  );
+}
+
+function TareasPlaceholder() {
+  const navigate = useNavigate();
+  return (
+    <div className="min-h-[75vh] flex flex-col items-center justify-center px-4 text-center">
+      <div className="p-4 bg-indigo-50 text-indigo-600 rounded-2xl mb-6 shadow-inner animate-pulse">
+        <ClipboardList className="w-12 h-12 stroke-[2]" />
+      </div>
+      <h2 className="text-2xl font-bold text-slate-800 mb-2">Gestión de Tareas</h2>
+      <p className="text-slate-500 max-w-sm mb-8 leading-relaxed">
+        Este módulo se encuentra bajo desarrollo activo. Pronto podrás organizar las tareas diarias, asignar responsables y controlar el progreso.
+      </p>
+      <button 
+        onClick={() => navigate('/')} 
+        className="px-6 py-2.5 bg-slate-800 text-white font-medium rounded-xl hover:bg-slate-700 hover:scale-[1.02] active:scale-[0.98] transition-all shadow-sm"
+      >
+        Volver al Menú Principal
+      </button>
     </div>
   );
 }
