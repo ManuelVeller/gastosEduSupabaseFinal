@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
+import { tasksService } from '../services/tasksService';
 import { DollarSign, Wrench, ClipboardList, Check, Calendar, User } from 'lucide-react';
 
 function MenuPrincipal() {
@@ -22,15 +23,14 @@ function MenuPrincipal() {
   const fetchPendingTasks = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('tareas')
-        .select('*');
-
-      if (error) throw error;
+      const tasks = await tasksService.getTasks();
 
       // Filtrar pendientes en memoria (cualquiera que no esté completada)
-      const pending = (data || []).filter(
-        t => t.estado !== 'completada' && t.estado !== 'completado'
+      const pending = (tasks || []).filter(
+        t => {
+          const est = t.estado ? t.estado.toLowerCase() : '';
+          return est !== 'completada' && est !== 'completado';
+        }
       );
       setPendingTasks(pending);
     } catch (err) {
@@ -44,36 +44,55 @@ function MenuPrincipal() {
     fetchPendingTasks();
   }, []);
 
-  // --- COMPLETE TASK QUICK ACTION ---
-  const handleCompleteTask = async (taskId, taskTitle) => {
+  // --- CYCLE TASK STATUS QUICK ACTION ---
+  const handleCycleTaskStatus = async (taskId, currentStatus, taskTitle) => {
     try {
-      const { error } = await supabase
-        .from('tareas')
-        .update({ estado: 'completada' })
-        .eq('id', taskId);
+      let nextStatus = 'En Progreso';
+      if (currentStatus === 'En Progreso') {
+        nextStatus = 'Completada';
+      }
 
-      if (error) throw error;
+      await tasksService.updateTaskStatus(taskId, nextStatus);
 
-      // Quitar de la lista local
-      setPendingTasks(prev => prev.filter(t => t.id !== taskId));
-      
-      // Mostrar Toast
-      const cleanTitle = taskTitle.replace(/\(Vence: [0-9/]{10}\)/, '').trim();
-      showToast(`¡Tarea "${cleanTitle}" completada con éxito!`);
+      if (nextStatus === 'Completada') {
+        // Quitar de la lista local si está completada
+        setPendingTasks(prev => prev.filter(t => t.id !== taskId));
+        showToast(`¡Tarea "${taskTitle}" completada con éxito!`);
+      } else {
+        // Actualizar el estado en la lista local
+        setPendingTasks(prev =>
+          prev.map(t => (t.id === taskId ? { ...t, estado: nextStatus } : t))
+        );
+        showToast(`Tarea "${taskTitle}" cambiada a "${nextStatus}"`);
+      }
     } catch (err) {
-      console.error('Error completing task:', err);
-      alert('Error al completar la tarea: ' + err.message);
+      console.error('Error cycling task status:', err);
+      alert('Error al cambiar el estado de la tarea: ' + err.message);
     }
   };
 
-  // Helper para extraer fecha y limpiar título
-  const parseTaskDate = (title) => {
-    const match = title.match(/\(Vence: ([0-9/]{10})\)/);
-    return match ? match[1] : null;
+  // Helpers para extraer fecha y limpiar título de tareas legacy y nuevas
+  const getTaskTitle = (t) => {
+    const titleVal = t.title || t.titulo || '';
+    if (!titleVal) return '';
+    if (t.descripcion || t.fecha_vencimiento || t.fecha_vence) {
+      return titleVal;
+    }
+    return titleVal.replace(/\(Vence: [0-9/]{10}\)/, '').trim();
   };
 
-  const cleanTaskTitle = (title) => {
-    return title.replace(/\(Vence: [0-9/]{10}\)/, '').trim();
+  const getTaskDate = (t) => {
+    const dueField = t.fecha_vencimiento || t.fecha_vence;
+    if (dueField) {
+      const parts = dueField.split('-');
+      if (parts.length === 3) {
+        return `${parts[2]}/${parts[1]}/${parts[0]}`;
+      }
+      return dueField;
+    }
+    const titleVal = t.title || t.titulo || '';
+    const match = titleVal.match(/\(Vence: ([0-9/]{10})\)/);
+    return match ? match[1] : null;
   };
 
   const options = [
@@ -165,10 +184,10 @@ function MenuPrincipal() {
           ) : (
             <div className="divide-y divide-slate-50 max-h-[250px] overflow-y-auto pr-1 no-scrollbar">
               {pendingTasks.map(t => {
-                const date = parseTaskDate(t.titulo);
-                const title = cleanTaskTitle(t.titulo);
+                const date = getTaskDate(t);
+                const title = getTaskTitle(t);
                 return (
-                  <div key={t.id} className="flex items-center justify-between py-3.5 first:pt-0 last:pb-0 group">
+                   <div key={t.id} className="flex items-center justify-between py-3.5 first:pt-0 last:pb-0 group">
                     <div className="space-y-1.5 pr-4 flex-1">
                       <p className="font-bold text-slate-700 text-sm group-hover:text-slate-900 transition-colors leading-snug">
                         {title}
@@ -179,7 +198,7 @@ function MenuPrincipal() {
                         </span>
                         <div className="flex items-center gap-1">
                           <User className="w-3.5 h-3.5" />
-                          <span>Asignado: {t.creado_por || 'Empleado'}</span>
+                          <span>Creador: {t.creado_por || 'Empleado'}</span>
                         </div>
                         {date && (
                           <div className="flex items-center gap-1 text-indigo-500 font-semibold">
@@ -189,13 +208,33 @@ function MenuPrincipal() {
                         )}
                       </div>
                     </div>
-                    <button
-                      onClick={() => handleCompleteTask(t.id, t.titulo)}
-                      className="p-2 bg-slate-50 hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 border border-slate-200 hover:border-emerald-200 rounded-xl transition-all shadow-sm hover:scale-105 active:scale-95 flex items-center justify-center"
-                      title="Marcar como Completada"
-                    >
-                      <Check className="w-4 h-4 stroke-[3]" />
-                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {/* Botón interactivo de ciclo de estado */}
+                      <button
+                        onClick={() => handleCycleTaskStatus(t.id, t.estado || 'Backlog', title)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all shadow-sm flex items-center gap-1 border hover:scale-105 active:scale-95 ${
+                          t.estado === 'En Progreso'
+                            ? 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
+                            : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                        }`}
+                        title={`Estado actual: ${t.estado || 'Backlog'}. Haz clic para avanzar.`}
+                      >
+                        {t.estado === 'En Progreso' ? (
+                          <>⚡ En Progreso</>
+                        ) : (
+                          <>📋 Backlog</>
+                        )}
+                      </button>
+
+                      {/* Botón de completado directo */}
+                      <button
+                        onClick={() => handleCycleTaskStatus(t.id, 'En Progreso', title)}
+                        className="p-2 bg-slate-50 hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 border border-slate-200 hover:border-emerald-200 rounded-xl transition-all shadow-sm hover:scale-105 active:scale-95 flex items-center justify-center shrink-0"
+                        title="Completar Tarea Directamente"
+                      >
+                        <Check className="w-4 h-4 stroke-[3]" />
+                      </button>
+                    </div>
                   </div>
                 );
               })}

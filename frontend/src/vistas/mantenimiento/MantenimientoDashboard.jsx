@@ -2,11 +2,12 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ListaCondiciones from './ListaCondiciones';
 import FormularioMantenimiento from './FormularioMantenimiento';
-import { ArrowLeft, Car, Wrench, Layers } from 'lucide-react';
+import MovimientosFlota from './MovimientosFlota';
+import { ArrowLeft, Car, Wrench, Layers, RefreshCw } from 'lucide-react';
 
 function MantenimientoDashboard() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('flota'); // 'flota' o 'registro'
+  const [activeTab, setActiveTab] = useState('flota'); // 'flota', 'registro' o 'movimientos'
   const [prefilledPatente, setPrefilledPatente] = useState('');
 
   const handleRegisterMaintenance = (patente) => {
@@ -77,6 +78,20 @@ function MantenimientoDashboard() {
               <Wrench className="w-4 h-4" />
               Registrar Servicio
             </button>
+            <button
+              onClick={() => {
+                setActiveTab('movimientos');
+                setPrefilledPatente('');
+              }}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                activeTab === 'movimientos'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-500/10'
+                  : 'text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <RefreshCw className="w-4 h-4" />
+              Movimientos
+            </button>
           </div>
         </div>
 
@@ -84,7 +99,7 @@ function MantenimientoDashboard() {
         <div className="pt-2">
           {activeTab === 'flota' ? (
             <ListaCondiciones onRegisterMaintenance={handleRegisterMaintenance} />
-          ) : (
+          ) : activeTab === 'registro' ? (
             <div className="max-w-xl mx-auto">
               <FormularioMantenimiento
                 initialPatente={prefilledPatente}
@@ -92,6 +107,8 @@ function MantenimientoDashboard() {
                 onSaved={handleSaved}
               />
             </div>
+          ) : (
+            <MovimientosFlota />
           )}
         </div>
 

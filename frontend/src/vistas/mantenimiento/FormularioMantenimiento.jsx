@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
-import { ArrowLeft, Wrench, Car, Clipboard, DollarSign, CreditCard, AlertTriangle, CheckCircle2, ChevronDown } from 'lucide-react';
+import { maintenanceService } from '../../services/maintenanceService';
+import { ArrowLeft, Wrench, Car, Clipboard, AlertTriangle, CheckCircle2, ChevronDown, FileText, Settings } from 'lucide-react';
 
 function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
   const navigate = useNavigate();
@@ -10,14 +11,13 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
   const [mantenimiento, setMantenimiento] = useState('');
   const [patente, setPatente] = useState(initialPatente);
   const [kilometros, setKilometros] = useState('');
-  const [total, setTotal] = useState('');
-  const [medioPago, setMedioPago] = useState('');
+  const [motivo, setMotivo] = useState('');
+  const [nuevoEstado, setNuevoEstado] = useState('Operativo');
 
   // --- ESTADOS DE CONTROL ---
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [errorText, setErrorText] = useState('');
-  const [activeSprint, setActiveSprint] = useState(null);
   const [vehiculos, setVehiculos] = useState([]);
   const [selectedVehiculo, setSelectedVehiculo] = useState(null);
 
@@ -26,7 +26,6 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
 
   // --- CARGAR DATOS INICIALES ---
   useEffect(() => {
-    fetchActiveSprint();
     fetchVehiculos();
   }, []);
 
@@ -39,6 +38,13 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
     const cleanPatente = patente.trim().toUpperCase();
     const found = vehiculos.find(v => v.patente.toUpperCase() === cleanPatente);
     setSelectedVehiculo(found || null);
+
+    if (found) {
+      const savedStatuses = localStorage.getItem('fleet_status');
+      const statuses = savedStatuses ? JSON.parse(savedStatuses) : {};
+      const currentStatus = statuses[found.patente] || found.estado || 'Operativo';
+      setNuevoEstado(currentStatus);
+    }
   }, [patente, vehiculos]);
 
   // Actualizar patente si cambia la prop inicial
@@ -47,21 +53,6 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
       setPatente(initialPatente);
     }
   }, [initialPatente]);
-
-  const fetchActiveSprint = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('sprints')
-        .select('*')
-        .eq('estado', 'activo')
-        .maybeSingle();
-
-      if (error) throw error;
-      setActiveSprint(data);
-    } catch (err) {
-      console.error('Error al chequear sprint activo:', err);
-    }
-  };
 
   const fetchVehiculos = async () => {
     try {
@@ -79,12 +70,7 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (!activeSprint) {
-      setErrorText('No se puede guardar: Debes iniciar un período de control en Finanzas primero.');
-      return;
-    }
-
-    if (!mantenimiento || !patente || !kilometros || !total || !medioPago) {
+    if (!mantenimiento || !patente || !kilometros || !motivo || !nuevoEstado) {
       setErrorText('Por favor, completa todos los campos.');
       return;
     }
@@ -99,55 +85,40 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
 
     try {
       const cleanPatente = patente.trim().toUpperCase();
-      const numTotal = parseFloat(total);
       const numKm = parseInt(kilometros, 10);
+
+      // Validar que los kilómetros ingresados no sean menores a los registrados
+      const lastKm = await maintenanceService.getLastKilometers(cleanPatente);
+      if (numKm < lastKm) {
+        setErrorText(`Los kilómetros ingresados (${numKm.toLocaleString()} km) no pueden ser menores a los kilómetros registrados anteriormente (${lastKm.toLocaleString()} km).`);
+        setLoading(false);
+        return;
+      }
 
       // Calculamos la fecha local de hoy en Argentina (UTC-3)
       const ahora = new Date();
       const offset = ahora.getTimezoneOffset() * 60000;
       const fechaLocal = new Date(ahora.getTime() - offset).toISOString().split('T')[0];
 
-      // 1. Guardar en historial_services
-      const serviceRecord = {
+      // Guardar en la nueva tabla maintenance_records y actualizar vehiculos
+      const record = {
         vehiculo_id: selectedVehiculo.id,
-        km_servicio: numKm,
-        tipo_aceite: selectedVehiculo.tipo_aceite || 'No especificado',
-        detalles: mantenimiento,
-        monto: numTotal,
-        medio_pago: medioPago,
+        patente: cleanPatente,
+        tipo_mantenimiento: mantenimiento,
+        kilometros: numKm,
+        motivo: motivo,
+        nuevo_estado: nuevoEstado,
+        creado_por: empleado,
         fecha: fechaLocal
       };
 
-      const { error: serviceError } = await supabase
-        .from('historial_services')
-        .insert([serviceRecord]);
+      await maintenanceService.saveMaintenanceRecord(record);
 
-      if (serviceError) throw serviceError;
-
-      // 2. Guardar en tabla GASTOS para impactar en Finanzas
-      const gastoRecord = {
-        monto: numTotal,
-        categoria: 'Mantenimiento',
-        descripcion: `Mantenimiento: ${mantenimiento} | Patente: ${cleanPatente} | KM: ${numKm}`,
-        creado_por: empleado,
-        sprint_id: activeSprint.id,
-        fecha_gasto: fechaLocal,
-        metodo_pago: medioPago
-      };
-
-      const { error: gastoError } = await supabase
-        .from('gastos')
-        .insert([gastoRecord]);
-
-      if (gastoError) throw gastoError;
-
-      // 3. Actualizar KM del vehículo en la tabla vehiculos
-      const { error: kmError } = await supabase
-        .from('vehiculos')
-        .update({ km_actual: numKm })
-        .eq('id', selectedVehiculo.id);
-
-      if (kmError) throw kmError;
+      // Actualizar localStorage para sincronizar con la UI del estado de la flota
+      const savedStatuses = localStorage.getItem('fleet_status');
+      const statuses = savedStatuses ? JSON.parse(savedStatuses) : {};
+      statuses[cleanPatente] = nuevoEstado;
+      localStorage.setItem('fleet_status', JSON.stringify(statuses));
 
       setSuccess(true);
       setTimeout(() => {
@@ -180,7 +151,7 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
           </div>
           <h3 className="text-2xl font-bold text-slate-800">¡Registro Guardado!</h3>
           <p className="text-slate-500 max-w-xs mx-auto">
-            El mantenimiento fue cargado exitosamente como gasto en el módulo de Finanzas.
+            El registro de mantenimiento fue guardado exitosamente.
           </p>
         </div>
       ) : (
@@ -196,16 +167,6 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
               <ArrowLeft className="w-3.5 h-3.5 transition-transform group-hover:-translate-x-0.5" />
               Cancelar y Volver
             </button>
-          )}
-
-          {/* AVISO DE SPRINT INACTIVO */}
-          {!activeSprint && (
-            <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl flex gap-3 text-amber-800 text-sm font-medium leading-relaxed">
-              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <span className="font-bold">Atención:</span> No hay un período de control activo en Finanzas. Debes abrir un turno/tablero antes de poder registrar transacciones.
-              </div>
-            </div>
           )}
 
           {/* CAMPO: TIPO DE MANTENIMIENTO */}
@@ -291,56 +252,41 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
             </div>
           </div>
 
-          {/* CONTENEDOR GRID: TOTAL Y MEDIO DE PAGO */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            
-            {/* CAMPO: TOTAL (Monto) */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block px-1">
-                Total
-              </label>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-lg font-bold text-slate-400">
-                  $
-                </span>
-                <input
-                  type="number"
-                  value={total}
-                  onChange={(e) => setTotal(e.target.value)}
-                  required
-                  min="0"
-                  step="0.01"
-                  placeholder="0.00"
-                  className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-3 pl-9 pr-4 text-sm font-bold text-slate-700 outline-none placeholder:text-slate-300 focus:border-blue-500 focus:bg-white transition-all"
-                />
-              </div>
-            </div>
+          {/* CAMPO: MOTIVO DEL SERVICE / DIAGNÓSTICO */}
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block px-1 flex items-center gap-1.5">
+              <FileText className="w-4 h-4 text-slate-400" />
+              Motivo del Service / Diagnóstico *
+            </label>
+            <textarea
+              required
+              rows="3"
+              placeholder="Detalle los motivos del ingreso al taller o diagnóstico del vehículo..."
+              value={motivo}
+              onChange={(e) => setMotivo(e.target.value)}
+              className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-3 px-4 text-sm font-medium text-slate-700 outline-none placeholder:text-slate-300 focus:border-blue-500 focus:bg-white transition-all resize-none"
+            />
+          </div>
 
-            {/* CAMPO: MEDIO DE PAGO */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block px-1">
-                Medio de Pago
-              </label>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
-                  <CreditCard className="w-4 h-4" />
-                </span>
-                <select
-                  value={medioPago}
-                  onChange={(e) => setMedioPago(e.target.value)}
-                  required
-                  className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-3 pl-11 pr-4 text-sm font-semibold text-slate-700 outline-none appearance-none focus:border-blue-500 focus:bg-white transition-all cursor-pointer"
-                >
-                  <option value="" disabled>Seleccionar</option>
-                  <option value="Mercado Pago">Mercado Pago</option>
-                  <option value="Efectivo">Efectivo</option>
-                  <option value="Débito">Débito</option>
-                  <option value="Crédito">Crédito</option>
-                </select>
-                <ChevronDown className="w-4 h-4 text-slate-400 absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none" />
-              </div>
+          {/* CAMPO: NUEVO ESTADO DEL VEHÍCULO */}
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block px-1 flex items-center gap-1.5">
+              <Settings className="w-4 h-4 text-slate-400" />
+              Nuevo Estado del Vehículo *
+            </label>
+            <div className="relative">
+              <select
+                value={nuevoEstado}
+                onChange={(e) => setNuevoEstado(e.target.value)}
+                required
+                className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-3 px-4 text-sm font-semibold text-slate-700 outline-none appearance-none focus:border-blue-500 focus:bg-white transition-all cursor-pointer"
+              >
+                <option value="Operativo">Operativo</option>
+                <option value="En Taller">En Taller</option>
+                <option value="Requiere Service">Requiere Service</option>
+              </select>
+              <ChevronDown className="w-4 h-4 text-slate-400 absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
-
           </div>
 
           {/* MENSAJE DE ERROR */}
@@ -354,7 +300,7 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
           {/* BOTÓN GUARDAR */}
           <button
             type="submit"
-            disabled={loading || !activeSprint}
+            disabled={loading}
             className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold text-lg rounded-2xl shadow-lg shadow-blue-500/20 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 active:scale-[0.98]"
           >
             {loading ? (

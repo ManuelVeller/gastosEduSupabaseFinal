@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
+import { tasksService } from '../../services/tasksService';
+import FormularioAltaTarea from './FormularioAltaTarea';
 import { ArrowLeft, Plus, Check, Clock, AlertCircle, X, User, Calendar, FileText, RefreshCw, Car, Layers } from 'lucide-react';
 
 function TareasKanban() {
@@ -15,12 +17,8 @@ function TareasKanban() {
 
   // --- ESTADOS DEL MODAL ---
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalLoading, setModalLoading] = useState(false);
-  const [newTitle, setNewTitle] = useState('');
-  const [newDate, setNewDate] = useState('');
-  const [newDesc, setNewDesc] = useState('');
-  const [assignedUser, setAssignedUser] = useState('');
-  const [selectedSprint, setSelectedSprint] = useState('');
+  const [activeTab, setActiveTab] = useState('sprint_activo'); // 'sprint_activo' o 'historial'
+  const [historySearch, setHistorySearch] = useState('');
 
   // --- TOAST NOTIFICATIONS ---
   const showToast = (message) => {
@@ -46,14 +44,9 @@ function TareasKanban() {
       if (sprintsError) throw sprintsError;
       setSprints(sprintsData || []);
 
-      // 2. Fetch Tareas
-      const { data: tareasData, error: tareasError } = await supabase
-        .from('tareas')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (tareasError) throw tareasError;
-      setTareas(tareasData || []);
+      // 2. Fetch Tareas desde el servicio
+      const tasksData = await tasksService.getTasks();
+      setTareas(tasksData || []);
 
       // 3. Fetch Perfiles
       const { data: perfilesData, error: perfilesError } = await supabase
@@ -120,10 +113,43 @@ function TareasKanban() {
   const parseTaskDesc = (title) => {
     const splitIndex = title.indexOf(' - ');
     if (splitIndex !== -1) {
-      // Retorna todo lo que está después del guion y remueve la fecha si existiera
       return title.substring(splitIndex + 3).replace(/\(Vence: [0-9/]{10}\)/, '').trim();
     }
     return '';
+  };
+
+  // --- HELPERS PARA COMPATIBILIDAD CON NUEVOS CAMPOS ---
+  const getTaskTitle = (t) => {
+    const titleVal = t.title || t.titulo || '';
+    if (!titleVal) return '';
+    if (t.descripcion || t.fecha_vencimiento || t.fecha_vence) {
+      return titleVal;
+    }
+    return cleanTaskTitle(titleVal);
+  };
+
+  const getTaskDesc = (t) => {
+    if (t.descripcion) return t.descripcion;
+    return parseTaskDesc(t.title || t.titulo || '');
+  };
+
+  const getTaskDate = (t) => {
+    const dueField = t.fecha_vencimiento || t.fecha_vence;
+    if (dueField) {
+      const parts = dueField.split('-');
+      if (parts.length === 3) {
+        return `${parts[2]}/${parts[1]}/${parts[0]}`;
+      }
+      return dueField;
+    }
+    return parseTaskDate(t.title || t.titulo || '');
+  };
+
+  const getSprintName = (t) => {
+    const sprintId = parseTaskSprintId(t.tipo_actividad);
+    if (sprintId === 'global') return 'General';
+    const sp = sprints.find(s => s.id === sprintId);
+    return sp ? sp.nombre : 'General';
   };
 
   // --- DRAG AND DROP HANDLERS ---
@@ -162,23 +188,10 @@ function TareasKanban() {
     ));
 
     try {
-      const { error } = await supabase
-        .from('tareas')
-        .update({ 
-          estado: targetState,
-          tipo_actividad: newTipoActividad
-        })
-        .eq('id', taskId);
-
-      if (error) throw error;
+      await tasksService.updateTaskStatus(taskId, targetState, newTipoActividad);
       
-      const cleanTitle = cleanTaskTitle(taskToMove.titulo);
-      const stateNames = {
-        pendiente: 'Pendiente',
-        en_progreso: 'En Progreso',
-        completada: 'Completada'
-      };
-      showToast(`Tarea "${cleanTitle}" movida a ${stateNames[targetState] || targetState}`);
+      const cleanTitle = getTaskTitle(taskToMove);
+      showToast(`Tarea "${cleanTitle}" movida a ${targetState}`);
 
     } catch (err) {
       console.error('Error al actualizar tarea vía Drag & Drop:', err);
@@ -187,107 +200,39 @@ function TareasKanban() {
     }
   };
 
-  // --- GUARDAR NUEVA TAREA DESDE EL MODAL ---
-  const handleCreateTask = async (e) => {
-    e.preventDefault();
-    if (!newTitle.trim()) return;
-
-    setModalLoading(true);
-
-    try {
-      let asignadoNombre = 'General';
-      let asignadoId = null;
-
-      // Buscar perfil asignado
-      const matchedProfile = perfiles.find(p => p.id === assignedUser);
-      if (matchedProfile) {
-        asignadoNombre = matchedProfile.nombre || matchedProfile.email;
-        asignadoId = matchedProfile.id;
-      } else if (assignedUser === 'manu' || assignedUser === 'edu') {
-        asignadoNombre = assignedUser;
-      }
-
-      // Encodificar la fecha y la descripción dentro del título del ticket
-      let formattedTitle = newTitle.trim();
-      if (newDesc.trim()) {
-        formattedTitle += ` - ${newDesc.trim()}`;
-      }
-      if (newDate) {
-        formattedTitle += ` (Vence: ${newDate.split('-').reverse().join('/')})`;
-      }
-
-      // Encodificar el Sprint en tipo_actividad
-      let newTipoActividad = 'General';
-      if (selectedSprint) {
-        newTipoActividad = `${selectedSprint}|General`;
-      }
-
-      const newTask = {
-        titulo: formattedTitle,
-        tipo_actividad: newTipoActividad,
-        creado_por: asignadoNombre,
-        usuario_id: asignadoId,
-        estado: 'pendiente' // Nace en Pendientes
-      };
-
-      const { data, error } = await supabase
-        .from('tareas')
-        .insert([newTask])
-        .select();
-
-      if (error) throw error;
-
-      if (data && data[0]) {
-        setTareas(prev => [data[0], ...prev]);
-      } else {
-        fetchData();
-      }
-
-      showToast(`¡Tarea "${newTitle.trim()}" creada con éxito!`);
-      
-      // Limpiar y cerrar
-      setNewTitle('');
-      setNewDate('');
-      setNewDesc('');
-      setAssignedUser('');
-      setSelectedSprint('');
-      setIsModalOpen(false);
-
-    } catch (err) {
-      console.error('Error al crear tarea:', err);
-      alert('No se pudo guardar la tarea: ' + err.message);
-    } finally {
-      setModalLoading(false);
-    }
+  const handleSavedTask = () => {
+    setIsModalOpen(false);
+    fetchData();
+    showToast('¡Tarea creada con éxito!');
   };
 
   // --- FILTRADO DE TAREAS POR SWIMLANE (SPRINT) Y ESTADO (COLUMNA) ---
   const getTasks = (sprintId, colState) => {
     return tareas.filter(t => {
       const taskSprintId = parseTaskSprintId(t.tipo_actividad);
-      const est = t.estado ? t.estado.toLowerCase() : 'pendiente';
+      const est = t.estado ? t.estado.trim() : 'Backlog';
       
       // Comprobar sprint
       if (taskSprintId !== sprintId) return false;
 
       // Comprobar columna de estado
-      if (colState === 'pendiente') {
-        return est === 'pendiente' || est === 'por_hacer';
+      if (colState === 'Backlog') {
+        return est.toLowerCase() === 'backlog' || est.toLowerCase() === 'pendiente' || est.toLowerCase() === 'por_hacer';
       }
-      if (colState === 'en_progreso') {
-        return est === 'en_progreso';
+      if (colState === 'En Progreso') {
+        return est.toLowerCase() === 'en progreso' || est.toLowerCase() === 'en_progreso';
       }
-      if (colState === 'completada') {
-        return est === 'completada' || est === 'completado';
+      if (colState === 'Completada') {
+        return est.toLowerCase() === 'completada' || est.toLowerCase() === 'completado';
       }
       return false;
     });
   };
 
   const columnas = [
-    { title: 'Pendientes', key: 'pendiente', border: 'border-slate-200', text: 'text-slate-700' },
-    { title: 'En Progreso', key: 'en_progreso', border: 'border-amber-200', text: 'text-amber-700' },
-    { title: 'Completadas', key: 'completada', border: 'border-emerald-200', text: 'text-emerald-700' }
+    { title: 'Backlog', key: 'Backlog', border: 'border-slate-200', text: 'text-slate-700' },
+    { title: 'En Progreso', key: 'En Progreso', border: 'border-amber-200', text: 'text-amber-700' },
+    { title: 'Completadas', key: 'Completada', border: 'border-emerald-200', text: 'text-emerald-700' }
   ];
 
   return (
@@ -330,11 +275,111 @@ function TareasKanban() {
           </div>
         </div>
 
-        {/* TABLERO SWIMLANES */}
+        {/* PESTAÑAS DE NAVEGACIÓN */}
+        <div className="flex border-b border-slate-200/80 gap-6">
+          <button
+            onClick={() => setActiveTab('sprint_activo')}
+            className={`pb-3 text-sm font-bold border-b-2 transition-all cursor-pointer ${
+              activeTab === 'sprint_activo'
+                ? 'border-indigo-600 text-indigo-600'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            🏃‍♂️ Sprint Activo (Tareas Vigentes)
+          </button>
+          <button
+            onClick={() => setActiveTab('historial')}
+            className={`pb-3 text-sm font-bold border-b-2 transition-all cursor-pointer ${
+              activeTab === 'historial'
+                ? 'border-indigo-600 text-indigo-600'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            ⏳ Historial Completadas
+          </button>
+        </div>
+
+        {/* TABLERO SWIMLANES O HISTORIAL */}
         {loading ? (
           <div className="text-center py-20 bg-white rounded-3xl border border-slate-100 shadow-sm">
             <RefreshCw className="w-10 h-10 text-indigo-500 animate-spin mx-auto mb-3" />
             <p className="text-slate-500 font-bold">Cargando tablero Kanban...</p>
+          </div>
+        ) : activeTab === 'historial' ? (
+          <div className="space-y-4">
+            {/* BUSCADOR DE HISTORIAL */}
+            <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-3">
+              <span className="text-slate-400">🔍</span>
+              <input
+                type="text"
+                placeholder="Buscar en el historial por título, descripción o creador..."
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-4 text-sm font-semibold text-slate-700 outline-none focus:border-indigo-500 focus:bg-white transition-all placeholder:text-slate-400"
+              />
+            </div>
+
+            {/* TABLA DE TAREAS COMPLETADAS */}
+            <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-100 text-xs font-bold uppercase text-slate-450 tracking-wider">
+                      <th className="p-4">Tarea</th>
+                      <th className="p-4">Descripción</th>
+                      <th className="p-4">Vencimiento</th>
+                      <th className="p-4">Auto / Sprint</th>
+                      <th className="p-4">Creado Por</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs font-medium text-slate-650">
+                    {tareas
+                      .filter(t => {
+                        const est = t.estado ? t.estado.toLowerCase() : '';
+                        if (est !== 'completada' && est !== 'completado') return false;
+
+                        const title = getTaskTitle(t).toLowerCase();
+                        const desc = getTaskDesc(t).toLowerCase();
+                        const creator = (t.creado_por || '').toLowerCase();
+                        const query = historySearch.toLowerCase();
+
+                        return title.includes(query) || desc.includes(query) || creator.includes(query);
+                      })
+                      .map(t => (
+                        <tr key={t.id} className="hover:bg-slate-50/40 transition-colors">
+                          <td className="p-4 font-bold text-slate-700">
+                            {getTaskTitle(t)}
+                          </td>
+                          <td className="p-4 max-w-xs break-words text-slate-500 font-normal leading-relaxed">
+                            {getTaskDesc(t) || <span className="italic text-slate-350 font-normal">Sin descripción</span>}
+                          </td>
+                          <td className="p-4 font-semibold text-slate-400">
+                            {getTaskDate(t) || 'Sin vencimiento'}
+                          </td>
+                          <td className="p-4">
+                            <span className="px-2.5 py-1 bg-slate-100 text-slate-600 font-bold rounded-lg uppercase tracking-wide text-[10px]">
+                              {getSprintName(t)}
+                            </span>
+                          </td>
+                          <td className="p-4 font-bold text-indigo-500">
+                            {t.creado_por || 'Empleado'}
+                          </td>
+                        </tr>
+                      ))}
+                    {tareas.filter(t => {
+                      const est = t.estado ? t.estado.toLowerCase() : '';
+                      return est === 'completada' || est === 'completado';
+                    }).length === 0 && (
+                      <tr>
+                        <td colSpan="5" className="p-8 text-center text-slate-400 italic font-semibold">
+                          No hay tareas completadas registradas.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         ) : (
           <div className="space-y-8">
@@ -388,11 +433,11 @@ function TareasKanban() {
                                 className="bg-white border border-slate-150 p-3 rounded-lg shadow-sm hover:shadow cursor-grab active:cursor-grabbing hover:-translate-y-0.5 transition-all duration-200 space-y-2 group"
                               >
                                 <h4 className="font-bold text-slate-700 text-xs leading-snug group-hover:text-slate-900 transition-colors break-words">
-                                  {cleanTaskTitle(t.titulo)}
+                                  {getTaskTitle(t)}
                                 </h4>
-                                {parseTaskDesc(t.titulo) && (
+                                {getTaskDesc(t) && (
                                   <p className="text-[10px] text-slate-400 leading-normal line-clamp-2">
-                                    {parseTaskDesc(t.titulo)}
+                                    {getTaskDesc(t)}
                                   </p>
                                 )}
                                 <div className="flex items-center justify-between pt-1.5 border-t border-slate-50 text-[9px] text-slate-400 font-medium">
@@ -400,10 +445,10 @@ function TareasKanban() {
                                     <User className="w-3 h-3 text-slate-400" />
                                     {t.creado_por || 'Empleado'}
                                   </span>
-                                  {parseTaskDate(t.titulo) && (
+                                  {getTaskDate(t) && (
                                     <span className="flex items-center gap-0.5 text-indigo-500 font-semibold">
                                       <Calendar className="w-3 h-3" />
-                                      {parseTaskDate(t.titulo)}
+                                      {getTaskDate(t)}
                                     </span>
                                   )}
                                 </div>
@@ -458,11 +503,11 @@ function TareasKanban() {
                               className="bg-white border border-slate-150 p-3 rounded-lg shadow-sm hover:shadow cursor-grab active:cursor-grabbing hover:-translate-y-0.5 transition-all duration-200 space-y-2 group"
                             >
                               <h4 className="font-bold text-slate-700 text-xs leading-snug group-hover:text-slate-900 transition-colors break-words">
-                                {cleanTaskTitle(t.titulo)}
+                                {getTaskTitle(t)}
                               </h4>
-                              {parseTaskDesc(t.titulo) && (
+                              {getTaskDesc(t) && (
                                 <p className="text-[10px] text-slate-400 leading-normal line-clamp-2">
-                                  {parseTaskDesc(t.titulo)}
+                                  {getTaskDesc(t)}
                                 </p>
                               )}
                               <div className="flex items-center justify-between pt-1.5 border-t border-slate-50 text-[9px] text-slate-400 font-medium">
@@ -470,10 +515,10 @@ function TareasKanban() {
                                   <User className="w-3 h-3 text-slate-400" />
                                   {t.creado_por || 'Empleado'}
                                 </span>
-                                {parseTaskDate(t.titulo) && (
+                                {getTaskDate(t) && (
                                   <span className="flex items-center gap-0.5 text-indigo-500 font-semibold">
                                     <Calendar className="w-3 h-3" />
-                                    {parseTaskDate(t.titulo)}
+                                    {getTaskDate(t)}
                                   </span>
                                 )}
                               </div>
@@ -492,162 +537,14 @@ function TareasKanban() {
 
       </div>
 
-      {/* MODAL DE CREACIÓN TIPO JIRA */}
+      {/* FORMULARIO DE ALTA DE TAREAS */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-6 border border-slate-100 relative overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            
-            {/* Barra superior decorativa */}
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-indigo-500 to-purple-600" />
-
-            {/* Cabecera Modal */}
-            <div className="flex items-center justify-between mb-5">
-              <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
-                📋 Crear Nueva Tarea
-              </h3>
-              <button
-                onClick={() => setIsModalOpen(false)}
-                className="p-1.5 hover:bg-slate-50 text-slate-400 hover:text-slate-600 rounded-full transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Formulario */}
-            <form onSubmit={handleCreateTask} className="space-y-4">
-              
-              {/* Campo: Título */}
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block px-1">
-                  Título de la Tarea *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej: Entregar Jeep en el Aeropuerto"
-                  value={newTitle}
-                  onChange={(e) => setNewTitle(e.target.value)}
-                  className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl p-3 text-sm font-semibold text-slate-700 outline-none focus:border-indigo-500 focus:bg-white transition-all placeholder:text-slate-300"
-                />
-              </div>
-
-              {/* Campo: Sprint/Auto */}
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block px-1">
-                  Sprint / Auto Asociado
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">
-                    <Car className="w-4 h-4" />
-                  </span>
-                  <select
-                    value={selectedSprint}
-                    onChange={(e) => setSelectedSprint(e.target.value)}
-                    className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-3 pl-10 pr-4 text-sm font-bold text-slate-700 outline-none appearance-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
-                  >
-                    <option value="">-- Sin asignar a Auto (Tarea General) --</option>
-                    {sprints.map(s => (
-                      <option key={s.id} value={s.id}>{s.nombre}</option>
-                    ))}
-                  </select>
-                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-400">
-                    <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
-                      <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/>
-                    </svg>
-                  </div>
-                </div>
-              </div>
-
-              {/* Campo: Fecha */}
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block px-1">
-                  Fecha Vencimiento
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">
-                    <Calendar className="w-4 h-4" />
-                  </span>
-                  <input
-                    type="date"
-                    value={newDate}
-                    onChange={(e) => setNewDate(e.target.value)}
-                    className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-3 pl-10 pr-4 text-sm font-semibold text-slate-700 outline-none focus:border-indigo-500 focus:bg-white transition-all"
-                  />
-                </div>
-              </div>
-
-              {/* Campo: Descripción */}
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block px-1">
-                  Descripción / Anotaciones
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3.5 top-3.5 text-slate-400">
-                    <FileText className="w-4 h-4" />
-                  </span>
-                  <textarea
-                    rows="3"
-                    placeholder="Detalles sobre qué hacer, precauciones..."
-                    value={newDesc}
-                    onChange={(e) => setNewDesc(e.target.value)}
-                    className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-3 pl-10 pr-4 text-sm font-medium text-slate-700 outline-none focus:border-indigo-500 focus:bg-white transition-all placeholder:text-slate-300 resize-none"
-                  />
-                </div>
-              </div>
-
-              {/* Campo: Asignar Persona */}
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block px-1">
-                  Asignar Persona *
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">
-                    <User className="w-4 h-4" />
-                  </span>
-                  <select
-                    value={assignedUser}
-                    onChange={(e) => setAssignedUser(e.target.value)}
-                    required
-                    className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-3 pl-10 pr-4 text-sm font-bold text-slate-700 outline-none appearance-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
-                  >
-                    <option value="" disabled>-- Seleccionar persona --</option>
-                    {perfiles.map(p => (
-                      <option key={p.id} value={p.id}>
-                        {p.nombre || p.email} ({p.rol})
-                      </option>
-                    ))}
-                    <option value="edu">edu (empleado)</option>
-                    <option value="manu">manu (admin)</option>
-                  </select>
-                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-400">
-                    <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
-                      <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/>
-                    </svg>
-                  </div>
-                </div>
-              </div>
-
-              {/* Botonera de Envío */}
-              <div className="grid grid-cols-2 gap-3 pt-3">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm rounded-xl transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={modalLoading}
-                  className="py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl shadow-md transition-colors disabled:opacity-50"
-                >
-                  {modalLoading ? 'Guardando...' : 'Crear Tarea'}
-                </button>
-              </div>
-
-            </form>
-          </div>
-        </div>
+        <FormularioAltaTarea
+          sprints={sprints}
+          perfiles={perfiles}
+          onClose={() => setIsModalOpen(false)}
+          onSaved={handleSavedTask}
+        />
       )}
 
       {/* TOAST SYSTEM */}
