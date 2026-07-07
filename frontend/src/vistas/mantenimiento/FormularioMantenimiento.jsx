@@ -44,6 +44,9 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
       const statuses = savedStatuses ? JSON.parse(savedStatuses) : {};
       const currentStatus = statuses[found.patente] || found.estado || 'Operativo';
       setNuevoEstado(currentStatus);
+      
+      // Autocompletar con los kilómetros actuales del auto
+      setKilometros(found.km_actual || '');
     }
   }, [patente, vehiculos]);
 
@@ -200,17 +203,27 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
               Patente Vehículo
             </label>
             <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 z-10">
                 <Car className="w-4 h-4" />
               </span>
-              <input
-                type="text"
+              <select
                 value={patente}
                 onChange={(e) => setPatente(e.target.value)}
                 required
-                placeholder="Ej: AA123BB"
-                className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-3 pl-11 pr-4 text-sm font-semibold text-slate-700 outline-none uppercase placeholder:text-slate-300 focus:border-blue-500 focus:bg-white transition-all"
-              />
+                className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-3 pl-11 pr-10 text-sm font-bold text-slate-700 outline-none focus:border-blue-500 focus:bg-white transition-all cursor-pointer appearance-none"
+              >
+                <option value="" disabled>-- Selecciona Patente / Auto --</option>
+                {vehiculos.map(v => (
+                  <option key={v.id} value={v.patente}>
+                    {v.patente} - {v.marca_modelo}
+                  </option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-400">
+                <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                  <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/>
+                </svg>
+              </div>
             </div>
 
             {/* DETALLE DEL VEHÍCULO DETECTADO */}
