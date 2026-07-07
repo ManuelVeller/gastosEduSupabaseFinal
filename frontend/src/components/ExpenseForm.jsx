@@ -24,6 +24,7 @@ function ExpenseForm({ onSaved, empleado, tipoRegistro }) {
     // --- ESTADOS PARA LA LÓGICA DE JIRA / SPRINTS ---
     const [activeSprint, setActiveSprint] = useState(null);
     const [loadingSprint, setLoadingSprint] = useState(true);
+    const [vehicles, setVehicles] = useState([]);
     const [sprintFormData, setSprintFormData] = useState({
         nombre: '',
         fecha_inicio: fechaLocal,
@@ -31,9 +32,10 @@ function ExpenseForm({ onSaved, empleado, tipoRegistro }) {
         notas: ''
     });
 
-    // Verificar si hay un Sprint activo al montar el componente
+    // Verificar si hay un Sprint activo y cargar vehículos al montar
     useEffect(() => {
         checkActiveSprint();
+        fetchVehiculos();
     }, []);
 
     // Reseteamos la categoría al cambiar entre Gasto e Ingreso
@@ -57,6 +59,27 @@ function ExpenseForm({ onSaved, empleado, tipoRegistro }) {
         } finally {
             setLoadingSprint(false);
         }
+    };
+
+    const fetchVehiculos = async () => {
+        try {
+            const { data, error } = await supabase
+                .from('vehiculos')
+                .select('*')
+                .order('patente', { ascending: true });
+            if (error) throw error;
+            setVehicles(data || []);
+        } catch (err) {
+            console.error("Error al cargar vehículos:", err);
+        }
+    };
+
+    const getCarLabel = (v) => {
+        if (!v || !v.marca_modelo || !v.patente) return '';
+        const words = v.marca_modelo.split(' ');
+        const model = words.length > 1 ? words.slice(1).join(' ') : words[0];
+        const suffix = v.patente.slice(-2).toUpperCase();
+        return `${model} ${suffix}`;
     };
 
     const handleSprintChange = (e) => {
@@ -201,16 +224,24 @@ function ExpenseForm({ onSaved, empleado, tipoRegistro }) {
                     
                     <form onSubmit={handleStartSprint} className="space-y-3 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
                         <div>
-                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Nombre del Período</label>
-                            <input 
-                                type="text"
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Auto Asociado (Período)</label>
+                            <select 
                                 name="nombre"
                                 required
-                                placeholder="Ej: Ingreso por Jeep"
                                 value={sprintFormData.nombre}
                                 onChange={handleSprintChange}
-                                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm font-semibold text-slate-700 outline-none focus:border-blue-500"
-                            />
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm font-bold text-slate-700 outline-none focus:border-blue-500 cursor-pointer"
+                            >
+                                <option value="" disabled>-- Seleccione un Vehículo --</option>
+                                {vehicles.map(v => {
+                                    const label = getCarLabel(v);
+                                    return (
+                                        <option key={v.id} value={label}>
+                                            {v.marca_modelo} ({v.patente})
+                                        </option>
+                                    );
+                                })}
+                            </select>
                         </div>
 
                         {/* Rango de Fechas (Desde - Hasta) */}
