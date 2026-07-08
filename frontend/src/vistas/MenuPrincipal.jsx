@@ -2,13 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { tasksService } from '../services/tasksService';
-import { DollarSign, Wrench, ClipboardList, Check, Calendar, User } from 'lucide-react';
+import { notificationService } from '../services/notificationService';
+import { DollarSign, Wrench, ClipboardList, Check, Calendar, User, Bell } from 'lucide-react';
 
 function MenuPrincipal() {
   const navigate = useNavigate();
   const [pendingTasks, setPendingTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [toasts, setToasts] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   // --- SHOW TOAST HELPER ---
   const showToast = (message) => {
@@ -17,6 +20,48 @@ function MenuPrincipal() {
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 3000);
+  };
+
+  // --- FETCH NOTIFICATIONS FROM SUPABASE ---
+  const fetchNotifications = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('notificaciones')
+        .select('*')
+        .order('creado_at', { ascending: false })
+        .limit(20);
+
+      if (error) throw error;
+      setNotifications(data || []);
+    } catch (err) {
+      console.warn('Error al cargar notificaciones (verifique si existe la tabla "notificaciones"):', err.message);
+    }
+  };
+
+  const handleMarkAsRead = async (id) => {
+    try {
+      const { error } = await supabase
+        .from('notificaciones')
+        .update({ leido: true })
+        .eq('id', id);
+      if (error) throw error;
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, leido: true } : n));
+    } catch (err) {
+      console.error('Error al marcar notificación como leída:', err);
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    try {
+      const { error } = await supabase
+        .from('notificaciones')
+        .update({ leido: true })
+        .eq('leido', false);
+      if (error) throw error;
+      setNotifications(prev => prev.map(n => ({ ...n, leido: true })));
+    } catch (err) {
+      console.error('Error al marcar todas las notificaciones como leídas:', err);
+    }
   };
 
   // --- FETCH PENDING TASKS ---
@@ -42,6 +87,24 @@ function MenuPrincipal() {
 
   useEffect(() => {
     fetchPendingTasks();
+    fetchNotifications();
+
+    // Suscribirse a cambios en tiempo real en la tabla notificaciones
+    const channel = supabase
+      .channel('realtime-notificaciones')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notificaciones' },
+        (payload) => {
+          setNotifications(prev => [payload.new, ...prev]);
+          showToast(`🔔 ${payload.new.titulo}: ${payload.new.mensaje}`);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   // --- CYCLE TASK STATUS QUICK ACTION ---
@@ -53,6 +116,15 @@ function MenuPrincipal() {
       }
 
       await tasksService.updateTaskStatus(taskId, nextStatus);
+
+      const taskObj = pendingTasks.find(t => t.id === taskId) || { id: taskId, title: taskTitle };
+
+      // Notificar a n8n
+      try {
+        await notificationService.sendTaskStatusChanged(taskObj, currentStatus, nextStatus);
+      } catch (errNotif) {
+        console.error('Error al notificar cambio rápido de estado de tarea:', errNotif);
+      }
 
       if (nextStatus === 'Completada') {
         // Quitar de la lista local si está completada
@@ -123,7 +195,71 @@ function MenuPrincipal() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col justify-between items-center px-6 py-12">
+    <div className="min-h-screen bg-slate-50 flex flex-col justify-between items-center px-6 py-12 relative">
+      
+      {/* CAMPANA DE NOTIFICACIONES (ARRIBA A LA DERECHA ABSOLUTO) */}
+      <div className="absolute top-6 right-6 z-40">
+        <div className="relative">
+          <button
+            onClick={() => setShowNotifications(!showNotifications)}
+            className="p-3 bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-800 rounded-2xl border border-slate-100 shadow-sm transition-all duration-200 cursor-pointer focus:outline-none relative flex items-center justify-center active:scale-95"
+            title="Notificaciones"
+          >
+            <Bell className="w-5 h-5" />
+            {notifications.filter(n => !n.leido).length > 0 && (
+              <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center border-2 border-white animate-pulse">
+                {notifications.filter(n => !n.leido).length}
+              </span>
+            )}
+          </button>
+
+          {showNotifications && (
+            <div className="absolute right-0 mt-3 w-80 bg-white rounded-2xl border border-slate-100 shadow-2xl z-50 overflow-hidden py-2 animate-in fade-in slide-in-from-top-3 duration-200">
+              <div className="px-4 py-2 border-b border-slate-100 flex justify-between items-center">
+                <span className="text-xs font-black text-slate-800 uppercase tracking-wider">Notificaciones</span>
+                {notifications.filter(n => !n.leido).length > 0 && (
+                  <button
+                    onClick={handleMarkAllAsRead}
+                    className="text-[10px] font-bold text-blue-600 hover:text-blue-800 transition-colors cursor-pointer"
+                  >
+                    Marcar todas
+                  </button>
+                )}
+              </div>
+              <div className="max-h-[300px] overflow-y-auto divide-y divide-slate-50">
+                {notifications.length === 0 ? (
+                  <p className="text-center text-xs text-slate-400 py-8">No hay notificaciones</p>
+                ) : (
+                  notifications.map(n => (
+                    <div
+                      key={n.id}
+                      onClick={() => handleMarkAsRead(n.id)}
+                      className={`p-3.5 text-left transition-colors cursor-pointer flex gap-3 ${
+                        n.leido ? 'bg-white hover:bg-slate-50/50' : 'bg-blue-50/20 hover:bg-blue-50/40'
+                      }`}
+                    >
+                      <div className="flex-1 space-y-1">
+                        <div className="flex justify-between items-start">
+                          <span className={`text-xs font-bold ${n.leido ? 'text-slate-700' : 'text-blue-900'}`}>
+                            {n.titulo}
+                          </span>
+                          <span className="text-[9px] text-slate-400 font-medium whitespace-nowrap">
+                            {n.creado_at ? new Date(n.creado_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
+                          {n.mensaje}
+                        </p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="max-w-4xl w-full flex-grow flex flex-col justify-center space-y-12">
         
         {/* HEADER */}

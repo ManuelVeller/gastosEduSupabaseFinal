@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { maintenanceService } from '../../services/maintenanceService';
+import { notificationService } from '../../services/notificationService';
 import { ArrowLeft, Wrench, Car, Clipboard, AlertTriangle, CheckCircle2, ChevronDown, FileText, Settings } from 'lucide-react';
 
 function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
@@ -120,8 +121,18 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
       // Actualizar localStorage para sincronizar con la UI del estado de la flota
       const savedStatuses = localStorage.getItem('fleet_status');
       const statuses = savedStatuses ? JSON.parse(savedStatuses) : {};
+      const oldStatus = statuses[cleanPatente] || 'Operativo';
       statuses[cleanPatente] = nuevoEstado;
       localStorage.setItem('fleet_status', JSON.stringify(statuses));
+
+      // Notificar cambio de estado del vehículo a n8n si cambió
+      if (oldStatus !== nuevoEstado) {
+        try {
+          await notificationService.sendVehicleStatusChanged(cleanPatente, oldStatus, nuevoEstado);
+        } catch (errNotif) {
+          console.error('Error al notificar cambio de estado del vehículo:', errNotif);
+        }
+      }
 
       setSuccess(true);
       setTimeout(() => {

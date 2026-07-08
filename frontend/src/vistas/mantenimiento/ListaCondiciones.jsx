@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../supabaseClient';
+import { notificationService } from '../../services/notificationService';
 import { Car, Shield, AlertCircle, Wrench, Search, RefreshCw, Layers } from 'lucide-react';
 
 function ListaCondiciones({ onRegisterMaintenance }) {
@@ -37,10 +38,19 @@ function ListaCondiciones({ onRegisterMaintenance }) {
   }, []);
 
   // --- GUARDAR ESTADO EN LOCALSTORAGE AL CAMBIAR ---
-  const handleStatusChange = (patente, nuevoEstado) => {
-    const updated = { ...estados, [patente]: nuevoEstado };
-    setEstados(updated);
-    localStorage.setItem('fleet_status', JSON.stringify(updated));
+  const handleStatusChange = async (patente, nuevoEstado) => {
+    const oldStatus = estados[patente] || 'Operativo';
+    if (oldStatus !== nuevoEstado) {
+      const updated = { ...estados, [patente]: nuevoEstado };
+      setEstados(updated);
+      localStorage.setItem('fleet_status', JSON.stringify(updated));
+
+      try {
+        await notificationService.sendVehicleStatusChanged(patente, oldStatus, nuevoEstado);
+      } catch (errNotif) {
+        console.error('Error al notificar cambio de estado de vehículo:', errNotif);
+      }
+    }
   };
 
   // --- OBTENER ESTADO ACTUAL DE UN VEHÍCULO (POR DEFECTO 'Operativo') ---

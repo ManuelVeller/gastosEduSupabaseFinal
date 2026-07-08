@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
+import { notificationService } from '../services/notificationService';
 
 const CATEGORIES_GASTOS = ['Transporte', 'Lavadero', 'Comida', 'Nafta', 'Estacionamiento', 'Otro'];
 const CATEGORIES_INGRESOS = ['Venta', 'Inyección Capital', 'Cobro', 'Otro'];
@@ -18,6 +19,7 @@ function ExpenseForm({ onSaved, empleado, tipoRegistro }) {
         metodo_pago: 'MP',
         fecha: fechaLocal
     });
+
     const [loading, setLoading] = useState(false);
     const [statusText, setStatusText] = useState('');
 
@@ -43,6 +45,34 @@ function ExpenseForm({ onSaved, empleado, tipoRegistro }) {
         setFormData(prev => ({ ...prev, categoria: '' }));
     }, [tipoRegistro]);
 
+    const checkSprintReminder = async (sprint) => {
+        try {
+            const fechaInicio = new Date(sprint.fecha_inicio);
+            const hoy = new Date();
+            const timeDiff = hoy.getTime() - fechaInicio.getTime();
+            const daysOpen = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
+            
+            // Se considera largo si lleva abierto 3 días o más, o si superó la fecha estimada
+            const isTooLong = daysOpen >= 3;
+            const isPastEstimated = sprint.fecha_fin_estimada && new Date(hoy.toISOString().split('T')[0]) > new Date(sprint.fecha_fin_estimada);
+
+            if (isTooLong || isPastEstimated) {
+                const localStorageKey = `last_sprint_reminder_sent_${sprint.id}`;
+                const lastSentStr = localStorage.getItem(localStorageKey);
+                const lastSent = lastSentStr ? new Date(parseInt(lastSentStr, 10)) : null;
+                
+                // Si nunca se envió o pasaron más de 24 horas (86400000 ms)
+                if (!lastSent || (hoy.getTime() - lastSent.getTime() > 24 * 60 * 60 * 1000)) {
+                    await notificationService.sendSprintReminder(sprint, daysOpen);
+                    localStorage.setItem(localStorageKey, hoy.getTime().toString());
+                    console.log(`Recordatorio de sprint inactivo/abierto enviado. ID: ${sprint.id}`);
+                }
+            }
+        } catch (err) {
+            console.error("Error al procesar el recordatorio del sprint:", err);
+        }
+    };
+
     const checkActiveSprint = async () => {
         setLoadingSprint(true);
         try {
@@ -54,6 +84,9 @@ function ExpenseForm({ onSaved, empleado, tipoRegistro }) {
 
             if (error) throw error;
             setActiveSprint(data);
+            if (data) {
+                checkSprintReminder(data);
+            }
         } catch (err) {
             console.error("Error al chequear el sprint activo:", err);
         } finally {
@@ -116,6 +149,16 @@ function ExpenseForm({ onSaved, empleado, tipoRegistro }) {
             }
 
             setActiveSprint(data);
+
+            // Notificar apertura de sprint a n8n
+            if (data) {
+                try {
+                    await notificationService.sendSprintOpened(data);
+                } catch (errNotif) {
+                    console.error("Error al enviar notificación de apertura de sprint:", errNotif);
+                }
+            }
+
             // Limpiar form de sprint y restablecer a fecha local
             setSprintFormData({ nombre: '', fecha_inicio: fechaLocal, fecha_fin_estimada: fechaLocal, notas: '' });
         } catch (err) {

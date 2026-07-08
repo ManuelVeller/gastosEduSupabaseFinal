@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { tasksService } from '../../services/tasksService';
+import { notificationService } from '../../services/notificationService';
 import { X, Calendar, FileText, User, Car, Settings } from 'lucide-react';
 
 function FormularioAltaTarea({ sprints = [], perfiles = [], onClose, onSaved }) {
@@ -52,7 +53,16 @@ function FormularioAltaTarea({ sprints = [], perfiles = [], onClose, onSaved }) 
         tipo_actividad: tipoActividad
       };
 
-      await tasksService.createTask(newTask);
+      const createdTask = await tasksService.createTask(newTask);
+
+      // Notificar creación a n8n
+      if (createdTask) {
+        try {
+          await notificationService.sendTaskCreated(createdTask);
+        } catch (errNotif) {
+          console.error('Error al enviar notificación de creación de tarea:', errNotif);
+        }
+      }
 
       if (onSaved) {
         onSaved();

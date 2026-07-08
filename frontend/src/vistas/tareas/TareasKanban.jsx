@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { tasksService } from '../../services/tasksService';
+import { notificationService } from '../../services/notificationService';
 import FormularioAltaTarea from './FormularioAltaTarea';
 import { ArrowLeft, Plus, Check, Clock, AlertCircle, X, User, Calendar, FileText, RefreshCw, Car, Layers } from 'lucide-react';
 
@@ -192,6 +193,13 @@ function TareasKanban() {
       
       const cleanTitle = getTaskTitle(taskToMove);
       showToast(`Tarea "${cleanTitle}" movida a ${targetState}`);
+
+      // Notificar cambio de estado a n8n
+      try {
+        await notificationService.sendTaskStatusChanged(taskToMove, taskToMove.estado, targetState);
+      } catch (errNotif) {
+        console.error('Error al notificar cambio de estado de tarea:', errNotif);
+      }
 
     } catch (err) {
       console.error('Error al actualizar tarea vía Drag & Drop:', err);
