@@ -28,19 +28,16 @@ export const maintenanceService = {
    * @param {object} record Datos del registro de mantenimiento.
    */
   async saveMaintenanceRecord(record) {
-    // 1. Insertar el registro en maintenance_records usando current_km
+    // 1. Insertar el registro en maintenance_records usando las columnas correctas en la base de datos
     const { data, error } = await supabase
       .from('maintenance_records')
       .insert([
         {
-          vehiculo_id: record.vehiculo_id,
-          patente: record.patente.trim().toUpperCase(),
-          tipo_mantenimiento: record.tipo_mantenimiento,
-          current_km: record.kilometros, // Guardar en la columna current_km
-          motivo: record.motivo,
-          nuevo_estado: record.nuevo_estado,
-          creado_por: record.creado_por,
-          fecha: record.fecha
+          vehicle_plate: record.patente.trim().toUpperCase(),
+          current_km: record.kilometros,
+          reason_maintenance: record.motivo,
+          fleet_status_update: record.nuevo_estado,
+          resolution_details: record.tipo_mantenimiento
         }
       ])
       .select();
@@ -63,7 +60,23 @@ export const maintenanceService = {
       throw vehiculoError;
     }
 
-    return data ? data[0] : null;
+    // Adaptar la fila devuelta para que el frontend siga recibiendo los nombres de columna que espera
+    if (data && data.length > 0) {
+      const r = data[0];
+      return {
+        id: r.id,
+        vehiculo_id: record.vehiculo_id,
+        patente: r.vehicle_plate,
+        tipo_mantenimiento: r.resolution_details,
+        kilometros: r.current_km,
+        motivo: r.reason_maintenance,
+        nuevo_estado: r.fleet_status_update,
+        creado_por: record.creado_por,
+        fecha: r.created_at ? r.created_at.split('T')[0] : ''
+      };
+    }
+
+    return null;
   },
 
   /**
@@ -77,13 +90,23 @@ export const maintenanceService = {
     const { data, error } = await supabase
       .from('maintenance_records')
       .select('*')
-      .eq('patente', cleanPatente)
-      .order('fecha', { ascending: true });
+      .eq('vehicle_plate', cleanPatente)
+      .order('created_at', { ascending: true });
 
     if (error) {
       console.error('Error al obtener registros de mantenimiento:', error);
       throw error;
     }
-    return data || [];
+
+    // Adaptar las filas devueltas para que el frontend reciba los nombres de columna que espera
+    return (data || []).map(r => ({
+      id: r.id,
+      fecha: r.created_at ? r.created_at.split('T')[0] : '',
+      tipo_mantenimiento: r.resolution_details || 'Otro',
+      current_km: r.current_km,
+      motivo: r.reason_maintenance,
+      nuevo_estado: r.fleet_status_update,
+      creado_por: 'Operador General' // Fallback ya que no hay columna de usuario creador en DB
+    }));
   }
 };
