@@ -69,6 +69,22 @@ function MovimientosFlota() {
     return fechaStr;
   };
 
+  // Formatear estampa de tiempo ISO a DD/MM/YYYY HH:MM
+  const formatFechaHora = (isoStr) => {
+    if (!isoStr) return '';
+    try {
+      const date = new Date(isoStr);
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      return `${day}/${month}/${year} ${hours}:${minutes}`;
+    } catch (e) {
+      return isoStr;
+    }
+  };
+
   // Preparar datos para el gráfico
   const chartData = records.map(r => ({
     fecha: formatFecha(r.fecha),
@@ -107,7 +123,7 @@ function MovimientosFlota() {
               <option value="" disabled>Seleccione un Vehículo</option>
               {vehiculos.map(v => (
                 <option key={v.id} value={v.patente}>
-                  {v.patente} - {v.marca_modelo}
+                  {maintenanceService.formatPatenteLabel(v.patente, v.marca_modelo)}
                 </option>
               ))}
             </select>
@@ -272,9 +288,9 @@ function MovimientosFlota() {
                   {[...records].reverse().map((r) => (
                     <tr key={r.id} className="hover:bg-slate-50/40 transition-colors">
                       <td className="p-4 font-bold text-slate-700 whitespace-nowrap">
-                        <span className="flex items-center gap-1.5">
+                        <span className="flex items-center gap-1.5" title={r.created_at}>
                           <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                          {formatFecha(r.fecha)}
+                          {formatFechaHora(r.created_at)}
                         </span>
                       </td>
                       <td className="p-4">
@@ -292,6 +308,8 @@ function MovimientosFlota() {
                         <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${
                           r.nuevo_estado === 'Operativo'
                             ? 'bg-emerald-50 text-emerald-700'
+                            : r.nuevo_estado === 'Alquilado'
+                            ? 'bg-indigo-50 text-indigo-700'
                             : r.nuevo_estado === 'En Taller'
                             ? 'bg-amber-50 text-amber-700'
                             : 'bg-rose-50 text-rose-700'

@@ -1,13 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../supabaseClient';
 import { notificationService } from '../../services/notificationService';
-import { Car, Shield, AlertCircle, Wrench, Search, RefreshCw, Layers } from 'lucide-react';
+import { maintenanceService } from '../../services/maintenanceService';
+import { Car, Shield, AlertCircle, Wrench, Search, RefreshCw, Layers, Key } from 'lucide-react';
 
 function ListaCondiciones({ onRegisterMaintenance }) {
   const [vehiculos, setVehiculos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('Todos');
+
+  // --- ESTADOS PARA EDICIÓN INLINE DE KM ---
+  const [editingKmId, setEditingKmId] = useState(null);
+  const [tempKm, setTempKm] = useState('');
+  const [updatingKm, setUpdatingKm] = useState(false);
 
   // --- CARGAR ESTADOS DESDE LOCALSTORAGE ---
   const [estados, setEstados] = useState(() => {
@@ -38,6 +44,7 @@ function ListaCondiciones({ onRegisterMaintenance }) {
   }, []);
 
   // --- GUARDAR ESTADO EN LOCALSTORAGE AL CAMBIAR ---
+  // --- GUARDAR ESTADO EN LOCALSTORAGE AL CAMBIAR ---
   const handleStatusChange = async (patente, nuevoEstado) => {
     const oldStatus = estados[patente] || 'Operativo';
     if (oldStatus !== nuevoEstado) {
@@ -50,6 +57,77 @@ function ListaCondiciones({ onRegisterMaintenance }) {
       } catch (errNotif) {
         console.error('Error al notificar cambio de estado de vehículo:', errNotif);
       }
+
+      // Guardar cambio de estado en la tabla de registros de mantenimiento
+      try {
+        const vehiculo = vehiculos.find(v => v.patente === patente);
+        if (vehiculo) {
+          const empleado = localStorage.getItem('nombre_empleado') || 'Operador General';
+          let motivoText = '';
+          if (nuevoEstado === 'Operativo') {
+            motivoText = 'Auto operativo y disponible';
+          } else if (nuevoEstado === 'En Taller') {
+            motivoText = 'Ingreso al taller';
+          } else if (nuevoEstado === 'Alquilado') {
+            motivoText = 'Auto alquilado';
+          } else {
+            motivoText = 'Requiere service';
+          }
+
+          await maintenanceService.saveMaintenanceRecord({
+            vehiculo_id: vehiculo.id,
+            patente: patente,
+            tipo_mantenimiento: 'Otro',
+            kilometros: vehiculo.km_actual || 0,
+            motivo: motivoText,
+            nuevo_estado: nuevoEstado,
+            creado_por: empleado
+          });
+        }
+      } catch (errDb) {
+        console.error('Error al guardar registro de movimiento en la BD:', errDb);
+      }
+    }
+  };
+
+  // --- GUARDAR KILOMETRAJE DESDE LA TARJETA ---
+  const handleSaveKm = async (vehiculo) => {
+    const newKm = parseInt(tempKm, 10);
+    if (isNaN(newKm)) return;
+    if (newKm < (vehiculo.km_actual || 0)) {
+      alert(`El kilometraje no puede ser menor al actual (${(vehiculo.km_actual || 0).toLocaleString()} km).`);
+      return;
+    }
+
+    setUpdatingKm(true);
+    try {
+      const empleado = localStorage.getItem('nombre_empleado') || 'Operador General';
+      const currentStatus = getEstado(vehiculo.patente);
+
+      await maintenanceService.saveMaintenanceRecord({
+        vehiculo_id: vehiculo.id,
+        patente: vehiculo.patente,
+        tipo_mantenimiento: 'Otro',
+        kilometros: newKm,
+        motivo: 'Actualización rápida de kilometraje',
+        nuevo_estado: currentStatus,
+        creado_por: empleado
+      });
+
+      // Actualizar estado local
+      setVehiculos(prev => prev.map(v => {
+        if (v.id === vehiculo.id) {
+          return { ...v, km_actual: newKm };
+        }
+        return v;
+      }));
+
+      setEditingKmId(null);
+    } catch (err) {
+      console.error('Error al actualizar kilometraje:', err);
+      alert('Error al actualizar el kilometraje.');
+    } finally {
+      setUpdatingKm(false);
     }
   };
 
@@ -65,6 +143,8 @@ function ListaCondiciones({ onRegisterMaintenance }) {
         return 'bg-emerald-50 text-emerald-700 border-emerald-200 focus:ring-emerald-500';
       case 'En Taller':
         return 'bg-amber-50 text-amber-700 border-amber-200 focus:ring-amber-500';
+      case 'Alquilado':
+        return 'bg-indigo-50 text-indigo-700 border-indigo-200 focus:ring-indigo-500';
       case 'Requiere Service':
         return 'bg-rose-50 text-rose-700 border-rose-200 focus:ring-rose-500';
       default:
@@ -79,7 +159,7 @@ function ListaCondiciones({ onRegisterMaintenance }) {
       acc[status] = (acc[status] || 0) + 1;
       return acc;
     },
-    { Operativo: 0, 'En Taller': 0, 'Requiere Service': 0 }
+    { Operativo: 0, 'En Taller': 0, 'Requiere Service': 0, Alquilado: 0 }
   );
 
   // --- FILTRAR VEHÍCULOS ---
@@ -96,7 +176,7 @@ function ListaCondiciones({ onRegisterMaintenance }) {
     <div className="space-y-6">
       
       {/* TARJETAS DE INDICADORES / CONTADORES */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
         
         {/* TOTAL VEHÍCULOS */}
         <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
@@ -117,6 +197,17 @@ function ListaCondiciones({ onRegisterMaintenance }) {
           </div>
           <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
             <Shield className="w-6 h-6" />
+          </div>
+        </div>
+
+        {/* ALQUILADOS */}
+        <div className="bg-indigo-50/30 p-5 rounded-2xl border border-indigo-50 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-xs font-bold text-indigo-600/80 uppercase tracking-wider block">Alquilados</span>
+            <span className="text-2xl font-black text-indigo-600">{stats.Alquilado}</span>
+          </div>
+          <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
+            <Key className="w-6 h-6" />
           </div>
         </div>
 
@@ -161,7 +252,7 @@ function ListaCondiciones({ onRegisterMaintenance }) {
 
         {/* FILTRADO DE ESTADO */}
         <div className="flex gap-2 w-full md:w-auto overflow-x-auto no-scrollbar">
-          {['Todos', 'Operativo', 'En Taller', 'Requiere Service'].map((filter) => (
+          {['Todos', 'Operativo', 'Alquilado', 'En Taller', 'Requiere Service'].map((filter) => (
             <button
               key={filter}
               onClick={() => setStatusFilter(filter)}
@@ -223,6 +314,7 @@ function ListaCondiciones({ onRegisterMaintenance }) {
                       )}`}
                     >
                       <option value="Operativo">Operativo</option>
+                      <option value="Alquilado">Alquilado</option>
                       <option value="En Taller">En Taller</option>
                       <option value="Requiere Service">Requiere Service</option>
                     </select>
@@ -240,9 +332,59 @@ function ListaCondiciones({ onRegisterMaintenance }) {
                   
                   <div className="flex justify-between items-center text-xs border-t border-slate-50 pt-2 text-slate-500 font-medium">
                     <span>Kilometraje:</span>
-                    <span className="font-bold text-slate-700 bg-slate-50 px-2 py-1 rounded-md">
-                      {v.km_actual ? v.km_actual.toLocaleString() : '0'} km
-                    </span>
+                    {editingKmId === v.id ? (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleSaveKm(v);
+                        }}
+                        className="flex items-center gap-1"
+                      >
+                        <input
+                          type="number"
+                          value={tempKm}
+                          onChange={(e) => setTempKm(e.target.value)}
+                          className="w-20 bg-slate-50 border border-slate-300 rounded px-1.5 py-0.5 text-xs text-slate-700 font-bold outline-none focus:border-blue-500"
+                          required
+                          min={v.km_actual || 0}
+                          disabled={updatingKm}
+                          autoFocus
+                        />
+                        <button
+                          type="submit"
+                          disabled={updatingKm}
+                          className="p-1 text-emerald-600 hover:bg-emerald-50 rounded font-bold"
+                          title="Guardar"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingKmId(null)}
+                          disabled={updatingKm}
+                          className="p-1 text-rose-600 hover:bg-rose-50 rounded font-bold"
+                          title="Cancelar"
+                        >
+                          ✕
+                        </button>
+                      </form>
+                    ) : (
+                      <span className="flex items-center gap-1">
+                        <span className="font-bold text-slate-700 bg-slate-50 px-2 py-1 rounded-md">
+                          {v.km_actual ? v.km_actual.toLocaleString() : '0'} km
+                        </span>
+                        <button
+                          onClick={() => {
+                            setEditingKmId(v.id);
+                            setTempKm(v.km_actual || '');
+                          }}
+                          className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
+                          title="Actualizar Kilometraje"
+                        >
+                          <Wrench className="w-3.5 h-3.5" />
+                        </button>
+                      </span>
+                    )}
                   </div>
 
                   {v.tipo_aceite && (

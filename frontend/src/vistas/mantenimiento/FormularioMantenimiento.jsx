@@ -226,7 +226,7 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
                 <option value="" disabled>-- Selecciona Patente / Auto --</option>
                 {vehiculos.map(v => (
                   <option key={v.id} value={v.patente}>
-                    {v.patente} - {v.marca_modelo}
+                    {maintenanceService.formatPatenteLabel(v.patente, v.marca_modelo)}
                   </option>
                 ))}
               </select>
@@ -306,6 +306,7 @@ function FormularioMantenimiento({ initialPatente = '', onCancel, onSaved }) {
                 className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-3 px-4 text-sm font-semibold text-slate-700 outline-none appearance-none focus:border-blue-500 focus:bg-white transition-all cursor-pointer"
               >
                 <option value="Operativo">Operativo</option>
+                <option value="Alquilado">Alquilado</option>
                 <option value="En Taller">En Taller</option>
                 <option value="Requiere Service">Requiere Service</option>
               </select>
