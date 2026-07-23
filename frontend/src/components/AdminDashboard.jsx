@@ -1,8 +1,41 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
 import { LogOut, FileText, CheckCircle, PieChart, ArrowUpRight, X } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid } from 'recharts';
 import * as XLSX from 'xlsx';
+
+const CustomTooltip = ({ active, payload, label }) => {
+  if (active && payload && payload.length) {
+    const ingresos = payload.find(p => p.dataKey === 'Ingresos')?.value || 0;
+    const gastos = payload.find(p => p.dataKey === 'Gastos')?.value || 0;
+    const neto = payload.find(p => p.dataKey === 'Neto')?.value ?? (ingresos - gastos);
+
+    return (
+      <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-xl font-sans text-xs space-y-2">
+        <p className="font-bold text-slate-800 border-b border-slate-100 pb-1.5 mb-1">
+          📅 Fecha: {label}
+        </p>
+        <div className="space-y-1">
+          <div className="flex justify-between gap-6">
+            <span className="text-slate-500 font-semibold">📈 Ingresos:</span>
+            <span className="text-green-600 font-bold">${ingresos.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</span>
+          </div>
+          <div className="flex justify-between gap-6">
+            <span className="text-slate-500 font-semibold">📉 Egresos:</span>
+            <span className="text-red-500 font-bold">${gastos.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</span>
+          </div>
+          <div className="flex justify-between gap-6 border-t border-slate-100 pt-1.5 mt-1 font-bold">
+            <span className="text-slate-700">💼 Flujo Neto:</span>
+            <span className={neto >= 0 ? 'text-blue-600' : 'text-amber-600'}>
+              ${neto.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
 
 const AdminDashboard = ({ user, onLogout }) => {
   const [gastos, setGastos] = useState([]);
@@ -215,60 +248,45 @@ const AdminDashboard = ({ user, onLogout }) => {
     return true;
   });
 
-  const balancePorCategoria = {};
+  // --- PROCESAR DATOS TEMPORALES PARA EL GRÁFICO (EVOLUCIÓN CRONOLÓGICA) ---
+  const mapaFechas = {};
 
   filteredGastos.forEach(g => {
-    if (!balancePorCategoria[g.categoria]) balancePorCategoria[g.categoria] = { Gastos: 0, Ingresos: 0 };
-    balancePorCategoria[g.categoria].Gastos += parseFloat(g.monto || 0);
+    const fecha = g.fecha_gasto ? g.fecha_gasto.split('T')[0] : 'Sin Fecha';
+    if (!mapaFechas[fecha]) mapaFechas[fecha] = { Gastos: 0, Ingresos: 0 };
+    mapaFechas[fecha].Gastos += parseFloat(g.monto || 0);
   });
 
   filteredIngresos.forEach(i => {
-    if (!balancePorCategoria[i.categoria]) balancePorCategoria[i.categoria] = { Gastos: 0, Ingresos: 0 };
-    balancePorCategoria[i.categoria].Ingresos += parseFloat(i.monto || 0);
+    const fecha = i.fecha ? i.fecha.split('T')[0] : 'Sin Fecha';
+    if (!mapaFechas[fecha]) mapaFechas[fecha] = { Gastos: 0, Ingresos: 0 };
+    mapaFechas[fecha].Ingresos += parseFloat(i.monto || 0);
   });
 
-  const chartData = Object.keys(balancePorCategoria).map(key => ({
-    name: key,
-    Gastos: balancePorCategoria[key].Gastos,
-    Ingresos: balancePorCategoria[key].Ingresos
-  }));
+  const fechasOrdenadas = Object.keys(mapaFechas).sort((a, b) => {
+    if (a === 'Sin Fecha') return 1;
+    if (b === 'Sin Fecha') return -1;
+    return new Date(a) - new Date(b);
+  });
 
-  // --- CÁLCULOS DE DESGLOSE DE GASTOS ---
-  const getGastosPorCategoria = () => {
-    const agrupado = {};
-    let total = 0;
-    filteredGastos.forEach(g => {
-      const cat = g.categoria || 'Sin Categoría';
-      const monto = parseFloat(g.monto || 0);
-      agrupado[cat] = (agrupado[cat] || 0) + monto;
-      total += monto;
-    });
-    return Object.entries(agrupado)
-      .map(([categoria, monto]) => ({
-        categoria,
-        monto,
-        porcentaje: total > 0 ? (monto / total) * 100 : 0
-      }))
-      .sort((a, b) => b.monto - a.monto);
-  };
+  const chartData = fechasOrdenadas.map(fecha => {
+    const d = mapaFechas[fecha];
+    let fechaFormateada = fecha;
+    if (fecha !== 'Sin Fecha') {
+      const dateObj = new Date(fecha + 'T00:00:00');
+      if (!isNaN(dateObj)) {
+        fechaFormateada = dateObj.toLocaleDateString('es-AR', { day: 'numeric', month: 'short' }).replace('.', '');
+      }
+    }
+    return {
+      name: fechaFormateada,
+      Ingresos: d.Ingresos,
+      Gastos: d.Gastos,
+      Neto: d.Ingresos - d.Gastos
+    };
+  });
 
-  const getGastosPorMedioPago = () => {
-    const agrupado = {};
-    let total = 0;
-    filteredGastos.forEach(g => {
-      const medio = g.metodo_pago || 'Sin Especificar';
-      const monto = parseFloat(g.monto || 0);
-      agrupado[medio] = (agrupado[medio] || 0) + monto;
-      total += monto;
-    });
-    return Object.entries(agrupado)
-      .map(([medioPago, monto]) => ({
-        medioPago,
-        monto,
-        porcentaje: total > 0 ? (monto / total) * 100 : 0
-      }))
-      .sort((a, b) => b.monto - a.monto);
-  };
+
 
   const totalGastos = filteredGastos.reduce((sum, g) => sum + parseFloat(g.monto || 0), 0);
   const totalIngresos = filteredIngresos.reduce((sum, i) => sum + parseFloat(i.monto || 0), 0);
@@ -305,13 +323,13 @@ const AdminDashboard = ({ user, onLogout }) => {
         <div className="flex-1 bg-white rounded-3xl shadow-sm border border-slate-100 p-6 min-h-[500px]">
           
           {/* SECCIÓN GLOBAL DE FILTROS */}
-          <div className="bg-slate-50 rounded-3xl border border-slate-200 grid grid-cols-1 gap-4 p-4 md:grid-cols-3 lg:flex lg:flex-row mb-6">
-            <div className="w-full lg:flex-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Filtrar Período</label>
+          <div className="bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 p-3 mb-6">
+            <div className="w-full">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider block mb-0.5">Filtrar Período</label>
               <select 
                 value={filtros.periodo} 
                 onChange={(e) => setFiltros({ ...filtros, periodo: e.target.value })}
-                className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none cursor-pointer pr-8 focus:border-indigo-500 transition-colors"
+                className="w-full bg-white border border-slate-200 rounded-lg py-1.5 px-2.5 text-xs font-bold text-slate-700 outline-none cursor-pointer pr-8 focus:border-indigo-500 transition-colors"
               >
                 <option value="activo">⚡ Sprint Actual Activo</option>
                 <option value="todos">🌍 Ver Histórico Completo</option>
@@ -321,32 +339,32 @@ const AdminDashboard = ({ user, onLogout }) => {
               </select>
             </div>
 
-            <div className="w-full lg:flex-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Desde Fecha</label>
+            <div className="w-full">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider block mb-0.5">Desde Fecha</label>
               <input 
                 type="date" 
                 value={filtros.fechaDesde} 
                 onChange={(e) => setFiltros({ ...filtros, fechaDesde: e.target.value, periodo: e.target.value ? 'personalizado' : filtros.periodo })}
-                className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none focus:border-indigo-500 transition-colors"
+                className="w-full bg-white border border-slate-200 rounded-lg py-1.5 px-2.5 text-xs font-bold text-slate-700 outline-none focus:border-indigo-500 transition-colors"
               />
             </div>
 
-            <div className="w-full lg:flex-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Hasta Fecha</label>
+            <div className="w-full">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider block mb-0.5">Hasta Fecha</label>
               <input 
                 type="date" 
                 value={filtros.fechaHasta} 
                 onChange={(e) => setFiltros({ ...filtros, fechaHasta: e.target.value, periodo: e.target.value ? 'personalizado' : filtros.periodo })}
-                className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none focus:border-indigo-500 transition-colors"
+                className="w-full bg-white border border-slate-200 rounded-lg py-1.5 px-2.5 text-xs font-bold text-slate-700 outline-none focus:border-indigo-500 transition-colors"
               />
             </div>
 
-            <div className="w-full lg:flex-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Filtrar por Categoría</label>
+            <div className="w-full">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider block mb-0.5">Filtrar por Categoría</label>
               <select 
                 value={filtros.categoria} 
                 onChange={(e) => setFiltros({ ...filtros, categoria: e.target.value })}
-                className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none cursor-pointer pr-8 focus:border-indigo-500 transition-colors"
+                className="w-full bg-white border border-slate-200 rounded-lg py-1.5 px-2.5 text-xs font-bold text-slate-700 outline-none cursor-pointer pr-8 focus:border-indigo-500 transition-colors"
               >
                 <option value="todos">✨ Todas las Categorías</option>
                 {categoriasDisponibles.map(cat => (
@@ -355,12 +373,12 @@ const AdminDashboard = ({ user, onLogout }) => {
               </select>
             </div>
 
-            <div className="w-full lg:flex-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">Filtrar por Medio de Pago</label>
+            <div className="w-full">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider block mb-0.5">Filtrar por Medio de Pago</label>
               <select 
                 value={filtros.medioPago} 
                 onChange={(e) => setFiltros({ ...filtros, medioPago: e.target.value })}
-                className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none cursor-pointer pr-8 focus:border-indigo-500 transition-colors"
+                className="w-full bg-white border border-slate-200 rounded-lg py-1.5 px-2.5 text-xs font-bold text-slate-700 outline-none cursor-pointer pr-8 focus:border-indigo-500 transition-colors"
               >
                 <option value="todos">💳 Todos los Medios</option>
                 {mediosPagoDisponibles.map(mp => (
@@ -396,74 +414,7 @@ const AdminDashboard = ({ user, onLogout }) => {
                     </div>
                   </div>
 
-                  {/* DESGLOSE DE GASTOS EN DOS COLUMNAS */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-slate-50/50 p-6 rounded-2xl border border-slate-100">
-                    
-                    {/* Columna 1: Por Categoría */}
-                    <div className="bg-white p-5 rounded-xl border border-slate-100 shadow-sm space-y-4">
-                      <div className="flex items-center gap-2 border-b border-slate-50 pb-2">
-                        <span className="text-lg">📁</span>
-                        <h3 className="font-extrabold text-sm text-slate-700 uppercase tracking-wider">Gastos por Categoría</h3>
-                      </div>
-                      
-                      {getGastosPorCategoria().length === 0 ? (
-                        <p className="text-slate-400 text-xs italic">No hay gastos registrados en este período.</p>
-                      ) : (
-                        <div className="space-y-3 max-h-[250px] overflow-y-auto pr-1 no-scrollbar">
-                          {getGastosPorCategoria().map((item, idx) => (
-                            <div key={idx} className="space-y-1">
-                              <div className="flex justify-between text-xs font-bold">
-                                <span className="text-slate-600">{item.categoria}</span>
-                                <span className="text-red-500">${item.monto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                              </div>
-                              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                                <div 
-                                  className="bg-indigo-500 h-full rounded-full transition-all duration-500" 
-                                  style={{ width: `${item.porcentaje}%` }} 
-                                />
-                              </div>
-                              <div className="text-[10px] text-slate-400 text-right font-medium">
-                                {item.porcentaje.toFixed(1)}% del total
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
 
-                    {/* Columna 2: Por Medio de Pago */}
-                    <div className="bg-white p-5 rounded-xl border border-slate-100 shadow-sm space-y-4">
-                      <div className="flex items-center gap-2 border-b border-slate-50 pb-2">
-                        <span className="text-lg">💳</span>
-                        <h3 className="font-extrabold text-sm text-slate-700 uppercase tracking-wider">Gastos por Medio de Pago</h3>
-                      </div>
-
-                      {getGastosPorMedioPago().length === 0 ? (
-                        <p className="text-slate-400 text-xs italic">No hay gastos registrados en este período.</p>
-                      ) : (
-                        <div className="space-y-3 max-h-[250px] overflow-y-auto pr-1 no-scrollbar">
-                          {getGastosPorMedioPago().map((item, idx) => (
-                            <div key={idx} className="space-y-1">
-                              <div className="flex justify-between text-xs font-bold">
-                                <span className="text-slate-600">{item.medioPago}</span>
-                                <span className="text-red-500">${item.monto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                              </div>
-                              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                                <div 
-                                  className="bg-emerald-500 h-full rounded-full transition-all duration-500" 
-                                  style={{ width: `${item.porcentaje}%` }} 
-                                />
-                              </div>
-                              <div className="text-[10px] text-slate-400 text-right font-medium">
-                                {item.porcentaje.toFixed(1)}% del total
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                  </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
                     <button 
@@ -483,14 +434,66 @@ const AdminDashboard = ({ user, onLogout }) => {
 
                   <div className="h-[320px] mt-4 w-full">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={chartData}>
-                        <XAxis dataKey="name" />
-                        <YAxis />
-                        <Tooltip cursor={{fill: '#f1f5f9'}} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
-                        <Legend />
-                        <Bar dataKey="Ingresos" fill="#16a34a" radius={[4, 4, 0, 0]} />
-                        <Bar dataKey="Gastos" fill="#ef4444" radius={[4, 4, 0, 0]} />
-                      </BarChart>
+                      <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -10, bottom: 5 }}>
+                        <defs>
+                          <linearGradient id="colorIngresos" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#16a34a" stopOpacity={0.2}/>
+                            <stop offset="95%" stopColor="#16a34a" stopOpacity={0.0}/>
+                          </linearGradient>
+                          <linearGradient id="colorGastos" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2}/>
+                            <stop offset="95%" stopColor="#ef4444" stopOpacity={0.0}/>
+                          </linearGradient>
+                          <linearGradient id="colorNeto" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2}/>
+                            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                        <XAxis 
+                          dataKey="name" 
+                          tick={{ fontSize: 10, fontWeight: 600, fill: '#64748b' }}
+                          stroke="#cbd5e1"
+                        />
+                        <YAxis 
+                          tick={{ fontSize: 10, fontWeight: 600, fill: '#64748b' }} 
+                          stroke="#cbd5e1"
+                        />
+                        <Tooltip content={<CustomTooltip />} />
+                        <Legend wrapperStyle={{ fontSize: '11px', fontWeight: 'bold', color: '#64748b' }} />
+                        <Area
+                          type="monotone"
+                          dataKey="Ingresos"
+                          stroke="#16a34a"
+                          strokeWidth={3}
+                          fillOpacity={1}
+                          fill="url(#colorIngresos)"
+                          dot={{ r: 5, stroke: '#16a34a', strokeWidth: 2, fill: '#ffffff' }}
+                          activeDot={{ r: 7, stroke: '#16a34a', strokeWidth: 3, fill: '#16a34a' }}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="Gastos"
+                          name="Egresos"
+                          stroke="#ef4444"
+                          strokeWidth={3}
+                          fillOpacity={1}
+                          fill="url(#colorGastos)"
+                          dot={{ r: 5, stroke: '#ef4444', strokeWidth: 2, fill: '#ffffff' }}
+                          activeDot={{ r: 7, stroke: '#ef4444', strokeWidth: 3, fill: '#ef4444' }}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="Neto"
+                          name="Flujo Neto"
+                          stroke="#3b82f6"
+                          strokeWidth={3}
+                          fillOpacity={1}
+                          fill="url(#colorNeto)"
+                          dot={{ r: 5, stroke: '#3b82f6', strokeWidth: 2, fill: '#ffffff' }}
+                          activeDot={{ r: 7, stroke: '#3b82f6', strokeWidth: 3, fill: '#3b82f6' }}
+                        />
+                      </AreaChart>
                     </ResponsiveContainer>
                   </div>
                 </div>
