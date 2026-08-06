@@ -272,6 +272,26 @@ function MenuPrincipal() {
           </p>
         </div>
 
+        {/* BANNER SANDBOX / DEMO */}
+        <div className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 rounded-3xl p-6 shadow-xl border border-indigo-500/20 text-white flex flex-col sm:flex-row items-center justify-between gap-6 transform hover:scale-[1.01] transition-all duration-300">
+          <div className="space-y-2 text-center sm:text-left">
+            <div className="flex items-center justify-center sm:justify-start gap-2">
+              <span className="bg-white/20 text-white text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-wider">Modo Sandbox</span>
+              <span className="text-xs font-bold text-indigo-100">100% Autónomo</span>
+            </div>
+            <h2 className="text-xl font-bold tracking-tight">💡 Probar Versión Demo Interactiva</h2>
+            <p className="text-xs text-indigo-100 max-w-lg font-medium leading-relaxed">
+              Experimentá el sistema de control de caja y flota sin conectarse a la base de datos ni requerir backend. Toda la información funciona en memoria y se reinicia al presionar F5.
+            </p>
+          </div>
+          <button 
+            onClick={() => navigate('/sandbox')}
+            className="px-6 py-3.5 bg-white text-indigo-600 font-extrabold rounded-2xl shadow-lg hover:shadow-xl hover:scale-[1.03] active:scale-[0.97] transition-all text-xs shrink-0 cursor-pointer"
+          >
+            Abrir Sandbox 🚀
+          </button>
+        </div>
+
         {/* CONTENEDOR GRID */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full">
           {options.map((opt, index) => {

@@ -5,6 +5,7 @@ import AdminDashboard from './components/AdminDashboard';
 import MenuPrincipal from './vistas/MenuPrincipal';
 import MantenimientoDashboard from './vistas/mantenimiento/MantenimientoDashboard';
 import TareasKanban from './vistas/tareas/TareasKanban';
+import SandboxApp from './components/Sandbox/SandboxApp';
 import { Wrench, ClipboardList } from 'lucide-react';
 
 function App() {
@@ -135,6 +136,7 @@ function App() {
           />
           <Route path="/mantenimiento" element={<MantenimientoDashboard />} />
           <Route path="/tareas" element={<TareasKanban />} />
+          <Route path="/sandbox" element={<SandboxApp />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
